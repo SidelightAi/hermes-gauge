@@ -1,0 +1,80 @@
+# Context-gauge thresholds and windows. Exact model ids only — never aliases.
+# A context_length reported by the provider (window_source: detected) wins
+# over this file. The fallback below is labeled "fallback" in every response;
+# a session whose max is still unknown shows an em dash instead of this number.
+#
+# This file is the single source of truth for every surface: the tools, the
+# /gauge command in Telegram, and the Desktop popover all read it. Change it by
+# hand, with `/gauge config set key=value`, or from the Desktop Settings panel —
+# the same checks run in all three.
+
+thresholds:
+  watch: 0.60
+  full: 0.85
+
+# Tokens held back for the model's reply, deducted from the nominal window.
+# 0 keeps the historical comparison against 200_000 exact.
+output_reserve: 0
+
+# How many characters make one token. 4 is the usual figure for English.
+# Whole number from 1 to 8. Not set here, so the built-in 4 applies:
+# chars_per_token: 4
+
+# Conservative window when nothing was detected or configured and the session
+# is allowed to fall back. Not a discovered context_length.
+fallback_window: 200000
+
+# Optional exact model ids, for example:
+#   claude-opus-4-6: 1000000
+# Leave empty out of the box so an unknown model is not given an invented size.
+models: {}
+
+# Push when an active session crosses a listed status. One push per status
+# per session inside the cooldown, and none again until that status changes.
+gauge:
+  alerts:
+    enabled: true
+    on: [WATCH, FULL]
+    cooldown_minutes: 30
+    # Where the push lands. Not set here, so the built-in "session" applies:
+    #   session                       the thread the session lives in (default)
+    #   home                          the home channel of that session's platform
+    #   home:<platform>               the home channel of a named platform
+    #   custom:<platform>:<chat_id>   one explicit chat, e.g. custom:telegram:-1001234567890
+    # route: session
+
+# When the exchange gets dull. Safe defaults: observe and recommend.
+# The plugin never compacts a session and never starts a new one.
+# Compaction and the session cycle belong to Hermes core. This plugin
+# only recommends and, once per crossing, pushes a notification.
+#
+# Change sensitivity with one line: preset: prudent   or   preset: standard.
+# A key written beside preset (mode, dull_at, on_dull, cooldown_minutes)
+# wins over the bundle. gauge_policy shows the merge without editing.
+# audit: OBSERVE and recommend only.
+# act:   the push is worded as an explicit recommended action
+#        ("compacte / nouvelle session recommandée"). Still never executed.
+policy:
+  preset: standard
+  presets:
+    standard:
+      mode: audit
+      # Fraction of the EFFECTIVE window (already reduced by the degradation
+      # factor). Substring keys match the model id. Clamped to 0.1–1.
+      dull_at:
+        default: 0.70
+        flash: 0.55
+        mini: 0.60
+      # Recommended when dull_at is reached, in order. Names only.
+      on_dull: [compact, new_session]
+      # One push per crossing, same hysteresis as gauge.alerts.
+      cooldown_minutes: 60
+    prudent:
+      # Earlier warning. Still audit: nothing ends a session by itself.
+      mode: audit
+      dull_at:
+        default: 0.55
+        flash: 0.40
+        mini: 0.45
+      on_dull: [compact, new_session]
+      cooldown_minutes: 30

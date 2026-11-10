@@ -1,0 +1,25 @@
+name: hermes-gauge
+version: 0.6.0
+manifest_version: 2
+api_version: 1
+description: Context gauge — see how full your agent's head is, per session and topic
+author: So Olivier
+license: MIT
+tags: [context, gauge, dashboard, demo]
+# This file is the plugin. The standalone dashboard is not a tool, a hook,
+# or a skill — Hermes does not load it from this manifest.
+provides_tools:
+- gauge_check
+- gauge_report
+- gauge_set_window
+- gauge_render
+- gauge_action
+provides_hooks:
+- post_llm_call
+- on_stream_delta
+- on_stream_end
+- api_request_error
+- post_api_request
+- post_compaction
+- on_session_reset
+- subagent_stop
