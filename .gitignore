@@ -10,3 +10,6 @@ __pycache__/
 *.sqlite
 *.sqlite3
 hermes-gauge/data/
+
+# Local agent rules and notes. They stay on this machine.
+.cursor/
