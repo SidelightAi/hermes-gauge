@@ -1,0 +1,9 @@
+{
+  "name": "hermes-gauge",
+  "label": "Context Gauge",
+  "description": "Context gauge - see how full your agent's head is, per session and topic",
+  "icon": "Gauge",
+  "version": "0.6.0",
+  "api": "plugin_api.py",
+  "tab": {"hidden": true}
+}
