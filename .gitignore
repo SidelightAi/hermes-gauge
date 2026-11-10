@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+.pytest_cache/
+.DS_Store
+.venv/
+.run/
+
+# Created on first run or by pytest. A clone starts without them.
+*.db
+*.sqlite
+*.sqlite3
+hermes-gauge/data/
