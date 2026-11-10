@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>hermes-gauge</title>
+<style>
+  :root { --bg:#0b0e14; --card:#141926; --fg:#e7ecf3; --muted:#7d8aa0; --ok:#2dd4a7; --watch:#f4b445; --full:#ef5b5b; }
+  * { box-sizing:border-box; margin:0; }
+  body { background:var(--bg); color:var(--fg); font-family:-apple-system,system-ui,sans-serif; padding:20px; max-width:560px; margin:auto; }
+  h1 { font-size:1.1rem; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); margin:0; }
+  .toolbar { display:flex; align-items:center; justify-content:space-between; gap:12px; margin-bottom:16px; flex-wrap:wrap; }
+  .demo-btn { background:var(--card); color:var(--fg); border:0; border-radius:99px; padding:8px 14px; font:inherit; font-size:.75rem; font-weight:700; letter-spacing:.04em; cursor:pointer; }
+  .demo-btn[aria-pressed="true"] { outline:1px solid var(--muted); }
+  .note { color:var(--muted); font-size:.75rem; min-height:1em; margin:-8px 0 12px; }
+  .dial { background:var(--card); border-radius:20px; padding:28px 20px; text-align:center; margin-bottom:16px; }
+  .big { font-size:4rem; font-weight:800; line-height:1; }
+  .status { display:inline-block; margin-top:10px; padding:4px 14px; border-radius:99px; font-weight:700; font-size:.8rem; letter-spacing:.1em; }
+  .OK{color:var(--ok)} .WATCH{color:var(--watch)} .FULL{color:var(--full)} .UNKNOWN{color:var(--muted)}
+  .sub { color:var(--muted); margin-top:10px; font-size:.9rem; }
+  .source { color:var(--muted); margin-top:6px; font-size:.75rem; border-bottom:1px dotted var(--muted); cursor:help; }
+  .session { background:var(--card); border-radius:14px; padding:14px 16px; margin-bottom:10px; }
+  .row { display:flex; justify-content:space-between; font-size:.85rem; margin-bottom:8px; gap:8px; }
+  .bar { height:8px; border-radius:99px; background:#232a3b; overflow:hidden; }
+  .bar > div { height:100%; border-radius:99px; }
+  .ok{background:var(--ok)} .watch{background:var(--watch)} .full{background:var(--full)}
+  .muted { color:var(--muted); font-size:.75rem; }
+  details.split { margin-top:8px; }
+  details.split summary { cursor:pointer; color:var(--muted); font-size:.75rem; }
+  .hint { border-bottom:1px dotted var(--muted); cursor:help; }
+</style>
+</head>
+<body>
+  <div class="toolbar">
+    <h1>Hermes &middot; Gauge</h1>
+    <button type="button" id="demo-btn" class="demo-btn" aria-pressed="false">Demo data</button>
+  </div>
+  <p class="note" id="note"></p>
+  <div class="dial">
+    <div class="big" id="pct">&ndash;</div>
+    <div class="status" id="status">&hellip;</div>
+    <div class="sub" id="advice"></div>
+    <div class="source" id="source" hidden></div>
+  </div>
+  <div id="sessions"></div>
+<script>
+function esc(value) {
+  return String(value == null ? '' : value).replace(/[&<>"']/g, function(ch) {
+    return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch];
+  });
+}
+function sourceTitle(source) {
+  if (source === 'detected') return 'Detected from the model context_length. Not an alias or a preset.';
+  if (source === 'configured') return 'Configured for this session. It does not apply to other sessions.';
+  if (source === 'fallback') return 'Conservative default from config.yaml. Not a measured window.';
+  return 'Window unresolved. No percentage until the max is known.';
+}
+function knownFill(session) {
+  if (!session || session.fill_display === '\u2014') return null;
+  if (session.fill_percent === null || session.fill_percent === undefined) return null;
+  var n = Number(session.fill_percent);
+  if (!isFinite(n)) return null;
+  if (n < 0) return 0;
+  if (n > 100) return 100;
+  return n;
+}
+function fillText(session) {
+  var n = knownFill(session);
+  if (n === null) return '\u2014';
+  var rounded = Math.round(n * 10) / 10;
+  var body = (rounded % 1 === 0) ? rounded.toFixed(0) : String(rounded);
+  return (session.approximate === false ? '' : '\u2248') + body + '%';
+}
+function render(d) {
+  var el = document.getElementById('sessions');
+  el.innerHTML = '';
+  var note = document.getElementById('note');
+  note.textContent = d.fixture ? 'Fixture sessions \u2014 Hermes is not required.' : (d.demo ? 'Demo data.' : '');
+  var sessions = d.sessions || [];
+  var top = null;
+  sessions.forEach(function(s) {
+    var fill = knownFill(s);
+    if (fill === null) return;
+    if (!top || fill > top.fill) top = {fill: fill, session: s};
+  });
+  var band = top ? (top.session.status || 'OK') : (sessions.length ? 'UNKNOWN' : 'OK');
+  if (band !== 'OK' && band !== 'WATCH' && band !== 'FULL') band = 'UNKNOWN';
+  document.getElementById('pct').textContent = sessions.length ? (top ? fillText(top.session) : '\u2014') : '0%';
+  var st = document.getElementById('status');
+  st.textContent = band; st.className = 'status ' + band;
+  var advice = {
+    FULL: 'Summarize and start a fresh session (/new).',
+    WATCH: 'Headroom getting tight - finish the topic first.',
+    OK: 'Plenty of headroom.',
+    UNKNOWN: 'Window not confirmed. No percentage until the max is known.'
+  };
+  document.getElementById('advice').textContent = advice[band] || advice.OK;
+  var source = document.getElementById('source');
+  if (top && top.session.window_source) {
+    var label = 'Window source: ' + top.session.window_source;
+    if (top.session.window_label) label += ' \u00b7 ' + top.session.window_label;
+    source.hidden = false;
+    source.textContent = label;
+    source.title = sourceTitle(top.session.window_source);
+  } else {
+    source.hidden = true;
+    source.textContent = '';
+  }
+  if (!sessions.length) {
+    el.innerHTML = '<div class="session muted">No usage recorded yet. Talk to your agent - the gauge fills itself.</div>';
+    return;
+  }
+  sessions.forEach(function(s) {
+    var c = (s.status || 'UNKNOWN').toLowerCase();
+    if (c !== 'ok' && c !== 'watch' && c !== 'full') c = 'unknown';
+    var fill = knownFill(s);
+    var width = fill === null ? 0 : fill;
+    var sourceName = s.window_source || (fill === null ? 'unresolved' : 'fallback');
+    var html = '<div class="session">' +
+      '<div class="row"><span><b>' + esc(String(s.session_id).slice(0, 14)) + '</b> &middot; ' + esc(s.model) + '</span>' +
+      '<span class="' + c + ' hint" title="' + esc(sourceTitle(sourceName)) + '">' + esc(fillText(s)) + '</span></div>' +
+      '<div class="bar"><div class="' + (c === 'unknown' ? '' : c) + '" style="width:' + width + '%"></div></div>' +
+      '<div class="row muted" style="margin-top:6px"><span>' + esc(s.turns) + ' turns &middot; ' + esc((Number(s.estimated_tokens || 0) / 1000).toFixed(0)) + 'k tok</span><span>' +
+      (s.last_seen ? esc(new Date(s.last_seen * 1000).toLocaleString()) : '') + '</span></div>';
+    if (s.window_label) {
+      html += '<div class="row muted"><span>' + esc(s.window_label) + '</span><span class="hint" title="' + esc(sourceTitle(sourceName)) + '">' + esc(sourceName) + '</span></div>';
+    }
+    if (s.breakdown) {
+      html += breakdownHtml(s.breakdown);
+    }
+    html += '</div>';
+    el.innerHTML += html;
+  });
+}
+function breakdownHtml(breakdown) {
+  var rows = [
+    ['System prompt', breakdown.system_prompt],
+    ['Tools', breakdown.tools],
+    ['Skills', breakdown.skills],
+    ['Conversation', breakdown.conversation]
+  ];
+  var html = '<details class="split"><summary>Context breakdown</summary>';
+  rows.forEach(function(row) {
+    if (row[1] === undefined || row[1] === null) return;
+    html += '<div class="row muted"><span>' + row[0] + '</span><span>\u2248' + esc(row[1]) + '</span></div>';
+  });
+  (breakdown.agents || []).forEach(function(agent) {
+    var fill = agent.fill_percent == null ? '\u2014' : ('\u2248' + agent.fill_percent + '%');
+    html += '<div class="row muted"><span>' + esc(agent.agent_id) + ' \u00b7 ' + esc(agent.model || '') + '</span><span>' + esc(fill) + '</span></div>';
+  });
+  return html + '</details>';
+}
+// Canonical demo sessions — keep in sync with webapp-demo/server.py.
+// Default window is 200_000 tokens. Two sessions per band, fullest first.
+var DEMO_ROWS = [
+  { session_id: 'release-review', model: 'claude-opus', fill_percent: 96, status: 'FULL', turns: 48, estimated_tokens: 192000, age: 120 },
+  { session_id: 'incident-room', model: 'claude-sonnet', fill_percent: 88, status: 'FULL', turns: 31, estimated_tokens: 176000, age: 840 },
+  { session_id: 'onboarding', model: 'hermes-3', fill_percent: 74, status: 'WATCH', turns: 19, estimated_tokens: 148000, age: 3600 },
+  { session_id: 'api-contract', model: 'gpt-4.1', fill_percent: 63, status: 'WATCH', turns: 14, estimated_tokens: 126000, age: 10800 },
+  { session_id: 'quick-question', model: 'hermes-3', fill_percent: 28, status: 'OK', turns: 5, estimated_tokens: 56000, age: 93600 },
+  { session_id: 'standup-notes', model: 'hermes-3', fill_percent: 12, status: 'OK', turns: 3, estimated_tokens: 24000, age: 172800 }
+];
+var demoOn = new URLSearchParams(location.search).get('demo') === '1';
+var liveGen = 0;
+
+function demoPayload() {
+  var now = Date.now() / 1000;
+  return {
+    sessions: DEMO_ROWS.map(function(s) {
+      return {
+        session_id: s.session_id,
+        model: s.model,
+        fill_percent: s.fill_percent,
+        status: s.status,
+        turns: s.turns,
+        estimated_tokens: s.estimated_tokens,
+        last_seen: now - s.age,
+        window_tokens: 200000,
+        window_source: 'fallback',
+        approximate: true
+      };
+    }),
+    window_tokens: 200000,
+    demo: true,
+    fixture: false
+  };
+}
+
+function paintDemoButton() {
+  document.getElementById('demo-btn').setAttribute('aria-pressed', demoOn ? 'true' : 'false');
+}
+
+function setDemo(on) {
+  demoOn = on;
+  liveGen += 1;
+  try {
+    var url = new URL(location.href);
+    if (on) url.searchParams.set('demo', '1');
+    else url.searchParams.delete('demo');
+    history.replaceState(null, '', url);
+  } catch (e) {}
+  paintDemoButton();
+  load();
+}
+
+function load() {
+  if (demoOn) {
+    render(demoPayload());
+    return;
+  }
+  var generation = liveGen;
+  fetch('/api/gauge').then(function(r){ return r.json(); }).then(function(d) {
+    if (demoOn || generation !== liveGen) return;
+    render(d);
+  }).catch(function() {
+    if (demoOn || generation !== liveGen) return;
+    document.getElementById('advice').textContent = 'Plugin database not found - install hermes-gauge in Hermes and use it.';
+  });
+}
+document.getElementById('demo-btn').addEventListener('click', function() { setDemo(!demoOn); });
+paintDemoButton();
+load(); setInterval(load, 5000);
+</script>
+</body>
+</html>
