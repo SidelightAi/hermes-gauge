@@ -1432,8 +1432,8 @@ def _compact(session_id, reason, at, monkeypatch):
 def _session_with_history(monkeypatch):
     """One session: climbs to 95%, is compacted twice, is reset once, climbs again.
 
-    The window is reported once (200_000). Each compaction forgets it until
-    Hermes reports it again, exactly as in production.
+    The window is reported once (200_000). A compaction clears the count but
+    keeps the window, so the second snapshot still knows it.
     """
     window = dict(context_length=200_000, confirm_window=True)
     breakdown = {"system_prompt": 16_000, "tools": 120_000, "skills": 8_000, "conversation": 236_000}
@@ -1468,8 +1468,8 @@ def test_audit_counts_compactions_apart_from_resets_and_remembers_the_peak(monke
     assert session["peak"]["status"] == "FULL"
     assert session["peak"]["fill_percent"] > 90
     assert session["peak"]["source"] in ("compaction", "turns")
-    # The second snapshot lost its window; it is read back from the first one.
-    assert [e["inferred"] for e in session["history"]] == [False, True, True]
+    # Only the third snapshot, taken while the gauge was still measuring, has no percentage.
+    assert [e["inferred"] for e in session["history"]] == [False, False, True]
     assert session["history"][1]["fill_percent"] == 75.0
     assert audit["totals"]["highest_peak"]["session_id"] == "sess-a"
     assert [e["kind"] for e in session["history"]] == ["compaction", "compaction", "reset"]
@@ -2655,3 +2655,111 @@ def test_public_tool_entry_points_return_strings():
     assert "session_id" in parsed or "error" in parsed
     out = tools._string_report(format="text")
     assert isinstance(out, str) and out.strip()
+
+
+# --- v0.6.1: what the chip shows around an automatic summary ----------------------
+
+WINDOW = dict(context_length=200_000, confirm_window=True)
+
+
+def _measured_session(session_id="prune", tokens=100_000):
+    """A session the provider has measured: ``tokens`` of prompt in a 200k window."""
+    tools.handle_post_api_request(
+        session_id=session_id, model="claude-opus",
+        usage={"prompt_tokens": tokens, "context_length": 200_000},
+    )
+    tools.record_llm_call(session_id, 4_000, model="claude-opus", **WINDOW)
+
+
+def test_a_provider_count_after_a_prune_re_anchors_the_gauge_at_once():
+    _measured_session()
+    assert tools.gauge_check(session_id="prune")["fill_percent"] == 50.0
+
+    tools.handle_compaction(session_id="prune", reason="proactive_prune")
+    assert tools.gauge_check(session_id="prune")["fill_display"] == "\u2014"
+
+    tools.handle_post_api_request(
+        session_id="prune", model="claude-opus",
+        usage={"prompt_tokens": 60_000, "context_length": 200_000},
+    )
+    reading = tools.gauge_check(session_id="prune")
+    assert reading["fill_percent"] == 30.0
+    assert reading["window_source"] == "detected"
+    assert reading["estimated_tokens"] == 60_000
+
+
+def test_an_interrupted_stream_after_a_prune_does_not_pin_the_gauge_near_zero():
+    _measured_session()
+    tools.handle_compaction(session_id="prune", reason="proactive_prune")
+
+    # A broken pipe leaves a few hundred characters of reply. That is not the context.
+    tools.handle_stream_delta(session_id="prune", delta="x" * 600, turn_id="t9", model="claude-opus")
+    tools.handle_api_error(session_id="prune", error="Broken pipe", turn_id="t9", model="claude-opus")
+    after_error = tools.gauge_check(session_id="prune")
+    assert after_error["fill_percent"] is None
+    assert after_error["status"] == "UNKNOWN"
+
+    # A finished turn with only the reply text is just as blind.
+    tools.handle_post_llm_call(
+        session_id="prune", assistant_response="y" * 900, model="claude-opus", turn_id="t10", **WINDOW,
+    )
+    assert tools.gauge_check(session_id="prune")["fill_percent"] is None
+
+    # The next real measurement settles it, and there is no dip on the way.
+    tools.handle_post_api_request(
+        session_id="prune", model="claude-opus", usage={"prompt_tokens": 70_000},
+    )
+    assert tools.gauge_check(session_id="prune")["fill_percent"] == 35.0
+
+
+def test_a_full_transcript_after_a_prune_re_anchors_the_gauge():
+    _measured_session()
+    tools.handle_compaction(session_id="prune", reason="proactive_prune")
+    history = [{"role": "user", "content": "z" * 40_000}]
+    tools.handle_post_llm_call(
+        session_id="prune", assistant_response="ok", model="claude-opus", turn_id="t11",
+        conversation_history=history, **WINDOW,
+    )
+    reading = tools.gauge_check(session_id="prune")
+    assert reading["fill_percent"] is not None
+    assert reading["fill_percent"] > 0
+
+
+def test_a_prune_keeps_the_detected_window_it_already_knew():
+    _measured_session()
+    tools.handle_compaction(session_id="prune", reason="proactive_prune")
+    row = tools._db().execute(
+        "SELECT detected_window, window_unresolved FROM usage WHERE session_id = ?", ("prune",)
+    ).fetchone()
+    assert row == (200_000, 0)
+
+    waiting = tools.gauge_check(session_id="prune")
+    assert waiting["fill_percent"] is None
+    assert waiting["nominal_window"] == 200_000
+    assert waiting["window_source"] == "detected"
+
+    # A second prune before any new measurement logs a snapshot that still names the window.
+    tools.handle_compaction(session_id="prune", reason="post_tool")
+    snapshot = tools.compaction_events("prune")[-1]["snapshot"]
+    assert snapshot["window_source"] == "detected"
+    assert snapshot["fill_percent"] is None
+
+
+def test_audit_still_reads_back_a_snapshot_written_without_a_window(monkeypatch):
+    """Before v0.6.1 a prune could log ``unresolved`` and no percentage. Those rows stay readable."""
+    monkeypatch.setattr(tools.time, "time", lambda: NOW - 5 * 3600)
+    tools.record_llm_call("old", 380_000, model="claude-opus", **WINDOW)
+    monkeypatch.setattr(tools.time, "time", lambda: NOW - 4 * 3600)
+    tools.handle_compaction(session_id="old", reason="post_tool")
+    legacy = {"estimated_tokens": 150_000, "fill_percent": None, "window_source": "unresolved", "turns": 3}
+    conn = tools._db()
+    conn.execute(
+        "INSERT INTO compaction_log (session_id, reason, snapshot, created) VALUES (?, ?, ?, ?)",
+        ("old", "proactive_prune", json.dumps(legacy), NOW - 3 * 3600),
+    )
+    conn.commit()
+    monkeypatch.setattr(tools.time, "time", lambda: NOW)
+
+    history = tools.gauge_audit(format="json")["sessions"][0]["history"]
+    assert [e["inferred"] for e in history] == [False, True]
+    assert history[1]["fill_percent"] == 75.0

@@ -359,6 +359,8 @@ def record_llm_call(session_id, chars, model=None, **extra):
     ``confirm_window=False`` marks the max unknown (em dash) unless a real
     ``context_length`` or a per-session override is already stored.
     ``replace=True`` drops the previous anchor instead of adding to it.
+    ``reply_only=True`` says ``chars`` is the size of a reply, not of the context.
+    Such an update cannot re-anchor a gauge that a summary cleared.
     """
     if not session_id:
         return
@@ -371,10 +373,26 @@ def record_llm_call(session_id, chars, model=None, **extra):
     now = time.time()
     conn = _db()
     current = _as_usage(_usage_row(conn, session_id))
-    replace = bool(extra.get("replace")) or (
-        current is not None and int(current["anchor_valid"] or 0) == 0
-    )
+    anchor_lost = current is not None and int(current["anchor_valid"] or 0) == 0
+    provider = extra.get("provider_tokens")
+    try:
+        provider_known = provider is not None and int(provider) > 0
+    except (TypeError, ValueError):
+        provider_known = False
+    replace = bool(extra.get("replace")) or anchor_lost
     touch = extra.get("touch_chars") is not False
+    if (
+        anchor_lost
+        and touch
+        and extra.get("reply_only")
+        and not extra.get("replace")
+        and not extra.get("direct")
+        and not provider_known
+    ):
+        # After a summary the old count is gone. A reply (or half a reply, when a
+        # stream breaks) says nothing about how big the context is now. Anchoring on
+        # it would pin the gauge near 0% until the next real measurement.
+        touch = False
 
     if (
         current is None
@@ -444,6 +462,10 @@ def record_llm_call(session_id, chars, model=None, **extra):
     if extra.get("provider_tokens") is not None:
         sets.append("provider_tokens = ?")
         values.append(int(extra["provider_tokens"]))
+        if provider_known:
+            # The provider just counted the whole prompt: that is a measurement.
+            # It re-anchors a gauge a summary had cleared, without waiting for a turn to end.
+            sets.append("anchor_valid = 1")
 
     if extra.get("direct"):
         sets.append("direct_chars = ?")
@@ -2314,8 +2336,10 @@ def invalidate_anchor(session_id, reason="compaction"):
     """Drop the usage anchor so a stale fill cannot be shown (Hermes #109760).
 
     The pre-compaction snapshot is kept in ``compaction_log``. The live row
-    no longer has a trustworthy max or a trustworthy count, so the gauge
-    shows an em dash until a fresh ``context_length`` arrives.
+    no longer has a trustworthy count, so the gauge shows an em dash until a
+    real measurement arrives: a provider token count, or a full transcript.
+    The window is not touched. A summary does not change the model's context
+    length, so the last detected one stays known.
     """
     if not session_id:
         return None
@@ -2342,8 +2366,6 @@ def invalidate_anchor(session_id, reason="compaction"):
         """UPDATE usage SET
                chars_in = 0,
                anchor_valid = 0,
-               window_unresolved = 1,
-               detected_window = NULL,
                provider_tokens = NULL,
                direct_chars = NULL,
                notified_status = NULL,
@@ -2430,13 +2452,13 @@ def _commit_turn(session_id, turn_id, chars, absolute=False, **record_kwargs):
             _store_turn(conn, session_id, turn_id, chars, absolute=True)
         return chars
     if previous is None:
-        record_llm_call(session_id, chars, **record_kwargs)
+        record_llm_call(session_id, chars, reply_only=True, **record_kwargs)
         if turn_id:
             _store_turn(conn, session_id, turn_id, chars)
         return chars
     growth = chars - previous
     if growth > 0:
-        record_llm_call(session_id, growth, **record_kwargs)
+        record_llm_call(session_id, growth, reply_only=True, **record_kwargs)
         conn.execute(
             "UPDATE recorded_turns SET chars = ? WHERE session_id = ? AND turn_id = ?",
             (chars, session_id, turn_id),

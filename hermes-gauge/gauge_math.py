@@ -1517,7 +1517,9 @@ def compose(estimated, nominal, reserve, source, anchor_valid, watch, full,
             "effective_window": None,
             "degrade_factor": degrade,
             "output_reserve": int(reserve or 0),
-            "window_source": "unresolved",
+            # A window that is known stays named when only the count is waiting
+            # (after a summary). Only a window nobody could resolve is "unresolved".
+            "window_source": "unresolved" if (source == "unresolved" or effective is None) else source,
             "estimated_tokens": estimated,
             "fill_percent": None,
             "fill_display": FILL_UNKNOWN,
