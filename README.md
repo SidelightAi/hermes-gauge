@@ -6,6 +6,8 @@ Your AI agent never tells you its context is full. Now it does.
 
 > See how full your agent's head is.
 
+This plugin is the [Hermes Gauge context window gauge](https://hermes-gauge.sidelight.ch) for the Hermes agent. It is published by [Sidelight AI Consulting for Swiss firms](https://sidelight.ch).
+
 <p align="center"><img src="assets/dashboard-demo.png" alt="The demo dashboard: six fictional sessions, fullest first, two each in FULL, WATCH and OK" width="380"></p>
 
 The demo dashboard (`make demo`) with its six fictional sessions. The plugin reads the same numbers from your own sessions.
