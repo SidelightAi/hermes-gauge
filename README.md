@@ -367,7 +367,18 @@ The plugin alerts, recommends and measures. It never compacts a session or ends 
 
 No API key, no pip package: the Python standard library is enough. `plugin.yaml` at the repo root is the manifest. `webapp-demo/` is not a tool, a hook, or a skill, and the manifest does not load it.
 
-The bare name `hermes plugins install hermes-gauge` is the catalog form. It works only once the plugin is admitted to the Hermes plugin catalog, which installs a reviewed commit instead of the branch tip.
+Requires Hermes 0.22.3 or later, the first release with the `post_compaction` hook and `ctx.post_message`.
+
+### What it touches on your machine
+
+- **Network**: none. No third-party service, no telemetry, no update check.
+- **Writes**: only under `~/.hermes/plugin-data/hermes-gauge/` (the readings database, written reports) and the plugin's own `hermes-gauge/config.yaml` when you save preferences.
+- **Reads outside its own data**: Hermes' `state.db`, read-only, for session titles and last activity.
+- **Shell commands**: `hermes send --quiet --to <target>`, only when `alerts.route` is `home` or `custom:`. It runs in a short background thread with a 45-second timeout.
+- **Not reachable from a tool, command or route**: `tools.gauge_audit()` called from Python with no `format` runs a setup audit. It runs `hermes doctor` (120-second timeout), reads the sizes of `AGENT.md`, `SOUL.md`, `config.yaml`, `skills/` and `plugins/`, and reads the memory files under `memories/` and `profiles/*/memories/`. It only reports; it changes nothing.
+- **Credentials**: none read, none stored.
+
+The bare name `hermes plugins install hermes-gauge` is the catalog form. It installs the commit the Hermes plugin catalog pins, which a maintainer reviewed and which can trail the branch tip.
 
 ## The demo webapp
 
