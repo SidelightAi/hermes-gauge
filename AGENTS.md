@@ -16,7 +16,7 @@ The plugin and the webapp use the Python standard library only. Do not add pip d
 
 ## Public tools
 
-Do not rename `gauge_check`, `gauge_report`, or `gauge_set_window`. `plugin.yaml` declares the tools. The product version is `0.6.0`. It lives in both `plugin.yaml` files, in `dashboard/manifest.json`, and in the panel title in `desktop/plugin.js`. Bump those four together.
+Do not rename `gauge_check`, `gauge_report`, or `gauge_set_window`. `plugin.yaml` declares the tools. The product version is `0.6.1`. It lives in both `plugin.yaml` files, in `dashboard/manifest.json`, and in the panel title in `desktop/plugin.js`. Bump those four together.
 
 ## Status bands
 

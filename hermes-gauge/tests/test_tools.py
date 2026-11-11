@@ -658,8 +658,8 @@ def test_manifest_lists_the_hooks_and_leaves_the_demo_out():
     ):
         assert hook in manifest
     assert "webapp-demo" not in manifest
-    assert "version: 0.6.0" in manifest
-    assert "version: 0.6.0" in nested
+    assert "version: 0.6.1" in manifest
+    assert "version: 0.6.1" in nested
 
 
 def test_root_entry_registers_the_same_hooks():
@@ -2745,26 +2745,6 @@ def test_a_prune_keeps_the_detected_window_it_already_knew():
     assert snapshot["fill_percent"] is None
 
 
-def test_audit_still_reads_back_a_snapshot_written_without_a_window(monkeypatch):
-    """Before v0.6.1 a prune could log ``unresolved`` and no percentage. Those rows stay readable."""
-    monkeypatch.setattr(tools.time, "time", lambda: NOW - 5 * 3600)
-    tools.record_llm_call("old", 380_000, model="claude-opus", **WINDOW)
-    monkeypatch.setattr(tools.time, "time", lambda: NOW - 4 * 3600)
-    tools.handle_compaction(session_id="old", reason="post_tool")
-    legacy = {"estimated_tokens": 150_000, "fill_percent": None, "window_source": "unresolved", "turns": 3}
-    conn = tools._db()
-    conn.execute(
-        "INSERT INTO compaction_log (session_id, reason, snapshot, created) VALUES (?, ?, ?, ?)",
-        ("old", "proactive_prune", json.dumps(legacy), NOW - 3 * 3600),
-    )
-    conn.commit()
-    monkeypatch.setattr(tools.time, "time", lambda: NOW)
-
-    history = tools.gauge_audit(format="json")["sessions"][0]["history"]
-    assert [e["inferred"] for e in history] == [False, True]
-    assert history[1]["fill_percent"] == 75.0
-
-
 def test_the_chip_says_when_the_context_was_summarized_and_from_what_to_what(monkeypatch):
     now = 1_700_000_000.0
     monkeypatch.setattr(tools.time, "time", lambda: now)
@@ -2827,3 +2807,23 @@ def test_the_chip_and_gauge_check_read_one_number_and_say_where_it_comes_from():
         "whole", 40_000, model="claude-opus", replace=True, direct=True, **WINDOW
     )
     assert tools.check_payload(tools._db(), "whole")["basis"] == "transcript"
+
+
+def test_audit_still_reads_back_a_snapshot_written_without_a_window(monkeypatch):
+    """Before v0.6.1 a prune could log ``unresolved`` and no percentage. Those rows stay readable."""
+    monkeypatch.setattr(tools.time, "time", lambda: NOW - 5 * 3600)
+    tools.record_llm_call("old", 380_000, model="claude-opus", **WINDOW)
+    monkeypatch.setattr(tools.time, "time", lambda: NOW - 4 * 3600)
+    tools.handle_compaction(session_id="old", reason="post_tool")
+    legacy = {"estimated_tokens": 150_000, "fill_percent": None, "window_source": "unresolved", "turns": 3}
+    conn = tools._db()
+    conn.execute(
+        "INSERT INTO compaction_log (session_id, reason, snapshot, created) VALUES (?, ?, ?, ?)",
+        ("old", "proactive_prune", json.dumps(legacy), NOW - 3 * 3600),
+    )
+    conn.commit()
+    monkeypatch.setattr(tools.time, "time", lambda: NOW)
+
+    history = tools.gauge_audit(format="json")["sessions"][0]["history"]
+    assert [e["inferred"] for e in history] == [False, True]
+    assert history[1]["fill_percent"] == 75.0
