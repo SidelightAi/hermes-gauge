@@ -2763,3 +2763,67 @@ def test_audit_still_reads_back_a_snapshot_written_without_a_window(monkeypatch)
     history = tools.gauge_audit(format="json")["sessions"][0]["history"]
     assert [e["inferred"] for e in history] == [False, True]
     assert history[1]["fill_percent"] == 75.0
+
+
+def test_the_chip_says_when_the_context_was_summarized_and_from_what_to_what(monkeypatch):
+    now = 1_700_000_000.0
+    monkeypatch.setattr(tools.time, "time", lambda: now)
+    _measured_session()
+    monkeypatch.setattr(tools.time, "time", lambda: now + 100)
+    tools.handle_compaction(session_id="prune", reason="proactive_prune")
+
+    waiting = tools.check_payload(tools._db(), "prune")
+    assert waiting["state"] == "SUMMARIZED"
+    note = waiting["last_compaction"]
+    assert note["automatic"] is True
+    assert note["at"] == now + 100
+    assert note["before_pct"] == 50.0
+    assert note["after_pct"] is None
+    assert note["recent"] is True
+
+    monkeypatch.setattr(tools.time, "time", lambda: now + 130)
+    tools.handle_post_api_request(
+        session_id="prune", model="claude-opus", usage={"prompt_tokens": 60_000},
+    )
+    settled = tools.check_payload(tools._db(), "prune")
+    assert settled["pct"] == 30.0
+    assert settled["last_compaction"]["before_pct"] == 50.0
+    assert settled["last_compaction"]["after_pct"] == 30.0
+    assert settled["last_compaction"]["recent"] is True
+
+    monkeypatch.setattr(tools.time, "time", lambda: now + 100 + 3600)
+    later = tools.check_payload(tools._db(), "prune")
+    assert later["last_compaction"]["recent"] is False
+
+
+def test_a_manual_summary_is_not_called_automatic_and_a_reset_is_not_a_summary(monkeypatch):
+    _measured_session()
+    tools.handle_compaction(session_id="prune", reason="manual")
+    assert tools.check_payload(tools._db(), "prune")["last_compaction"]["automatic"] is False
+
+    _measured_session("fresh")
+    tools.handle_session_reset(old_session_id="fresh", new_session_id="fresh-2", reason="new_session")
+    assert tools.check_payload(tools._db(), "fresh").get("last_compaction") is None
+
+
+def test_a_session_never_summarized_has_no_compaction_note():
+    _measured_session()
+    assert tools.check_payload(tools._db(), "prune").get("last_compaction") is None
+
+
+def test_the_chip_and_gauge_check_read_one_number_and_say_where_it_comes_from():
+    _measured_session("same", tokens=40_000)
+    chip = tools.check_payload(tools._db(), "same")
+    tool = tools.gauge_check(session_id="same")
+    assert chip["pct"] == tool["fill_percent"]
+    assert chip["tokens_in"] == tool["estimated_tokens"]
+    assert chip["basis"] == tool["basis"] == "provider"
+    assert chip["session_id_full"] == "same"
+
+    tools.record_llm_call("replies", 8_000, model="claude-opus", **WINDOW)
+    assert tools.check_payload(tools._db(), "replies")["basis"] == "estimate"
+
+    tools.record_llm_call(
+        "whole", 40_000, model="claude-opus", replace=True, direct=True, **WINDOW
+    )
+    assert tools.check_payload(tools._db(), "whole")["basis"] == "transcript"

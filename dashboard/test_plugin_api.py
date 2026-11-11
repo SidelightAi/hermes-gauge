@@ -174,6 +174,10 @@ def test_check_json_for_glm_flash_reports_tokens_and_effective_fill(hermes_home)
     for extra in ("name", "idle", "room", "next", "hint", "language", "system_chars"):
         payload.pop(extra, None)
     assert isinstance(age, int) and age >= 0
+    # v0.6.1: where the count comes from, and the last summary (none here).
+    assert payload.pop("basis") == "estimate"
+    assert payload.pop("last_compaction") is None
+    assert payload.pop("session_id_full") == "glm-flash-demo"
     assert payload == {
         "pct": 46.3,
         "pct_nominal": 11.6,

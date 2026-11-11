@@ -7,6 +7,7 @@ import logging
 import os
 import re
 import shutil
+import sqlite3
 import subprocess
 import sys
 import threading
@@ -662,6 +663,17 @@ def _estimate_from_usage(usage, cpt=None):
             usage["direct_chars"], direct=True, chars_per_token=cpt
         ), True, True
     return gauge_math.estimate_tokens(usage.get("chars_in") or 0, chars_per_token=cpt), True, False
+
+
+def _basis(usage):
+    """Where the count comes from: the provider, a full transcript, or an estimate."""
+    if not usage:
+        return "estimate"
+    if usage.get("provider_tokens") is not None:
+        return "provider"
+    if usage.get("direct_chars") is not None:
+        return "transcript"
+    return "estimate"
 
 
 def _char_parts(usage):
@@ -1400,6 +1412,7 @@ def _finish(conn, session_id, fields, usage, notify):
     )
     fields["notification"] = None
     fields["in_flight"] = None
+    fields["basis"] = _basis(usage)
     if status == "WATCH":
         fields["in_flight"] = {
             "note": "Compaction is close. This is what is in the window right now.",
@@ -1972,6 +1985,57 @@ def _band_color(state):
     return {"OK": "#00e676", "WATCH": "#ffb300", "FULL": "#ff5252"}.get(state, "#7d8a9c")
 
 
+RECENT_COMPACTION_SECONDS = 60
+# Older than this, the popover no longer mentions the summary.
+COMPACTION_NOTE_SECONDS = 6 * 3600
+
+
+def _last_compaction(conn, session_id, now, pct, anchor):
+    """The latest summary of this session, for the chip. ``None`` when there is none.
+
+    ``before_*`` is the count the gauge held when Hermes summarized. ``after_*`` is
+    the first measurement taken since; it stays ``None`` while the gauge is still
+    measuring. A fresh start (``/new``) and the in-flight WATCH copy are not summaries.
+    """
+    audit = _sibling("audit")
+    try:
+        rows = conn.execute(
+            "SELECT reason, snapshot, created FROM compaction_log "
+            "WHERE session_id = ? ORDER BY id DESC LIMIT 25",
+            (session_id,),
+        ).fetchall()
+    except sqlite3.Error:
+        # An older or partial database: the note is a nicety, the chip must still answer.
+        return None
+    for reason, snapshot, created in rows:
+        if audit.event_kind(reason) != audit.KIND_COMPACTION:
+            continue
+        try:
+            before = json.loads(snapshot) if snapshot else {}
+        except json.JSONDecodeError:
+            before = {}
+        if not isinstance(before, dict):
+            before = {}
+        try:
+            at = float(created)
+        except (TypeError, ValueError):
+            return None
+        ago = max(int(now - at), 0)
+        if ago > COMPACTION_NOTE_SECONDS:
+            return None
+        return {
+            "at": at,
+            "ago_s": ago,
+            "reason": str(reason or ""),
+            "automatic": str(reason or "").strip().lower() != "manual",
+            "recent": ago <= RECENT_COMPACTION_SECONDS,
+            "before_pct": before.get("fill_percent"),
+            "before_tokens": before.get("estimated_tokens"),
+            "after_pct": pct if anchor else None,
+        }
+    return None
+
+
 def check_payload(conn, session_id=None):
     """The chip payload. Same fill as ``gauge_check`` and the alerts.
 
@@ -2011,7 +2075,13 @@ def check_payload(conn, session_id=None):
         pct_nominal = gauge_math.fill_percent(estimated / int(nominal))
     family, _factor = gauge_math.model_family(fields.get("model"))
     name = _session_label(sid, lang)
+    last_compaction = _last_compaction(conn, sid, time.time(), pct, anchor)
+    if last_compaction is not None:
+        last_compaction["after_tokens"] = estimated if anchor and pct is not None else None
     return {
+        "basis": _basis(usage),
+        "last_compaction": last_compaction,
+        "session_id_full": str(sid),
         "pct": pct,
         "pct_nominal": pct_nominal,
         "pct_effective": pct,

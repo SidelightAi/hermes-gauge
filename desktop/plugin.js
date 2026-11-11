@@ -17,10 +17,48 @@ function ago(seconds) {
 
 function chipLabel(d) {
   if (!d || d.state === 'NO DATA') return 'gauge · no chat yet'
-  if (d.state === 'SUMMARIZED') return 'summarized · measuring'
+  const note = d.last_compaction
+  if (d.state === 'SUMMARIZED') return (note && note.automatic ? 'auto-summary' : 'summarized') + ' · measuring'
   if (d.pct == null) return 'gauge · offline'
   const idle = d.idle || d.age_s > 3600 ? ' · idle' : ''
-  return Math.round(d.pct) + '% ' + (d.state || '') + idle
+  // A summary Hermes ran on its own is the one thing the percentage cannot explain.
+  const badge = note && note.recent ? (note.automatic ? ' · auto-summary' : ' · summarized') : ''
+  return Math.round(d.pct) + '% ' + (d.state || '') + badge + idle
+}
+
+// "Context summarized automatically at 03:05 — 45% → 31%". Empty when there is nothing to say.
+function compactionLine(c) {
+  if (!c || typeof c.at !== 'number') return ''
+  const when = formatClock(c.at * 1000).slice(0, 5)
+  const lead = (c.automatic ? 'Context summarized automatically at ' : 'Context summarized at ') + when
+  const before = typeof c.before_pct === 'number'
+    ? formatPct(c.before_pct)
+    : (typeof c.before_tokens === 'number' ? formatCompact(c.before_tokens) + ' tok' : null)
+  if (before == null) return lead
+  const after = typeof c.after_pct === 'number'
+    ? (c.recent ? '' : 'now ') + formatPct(c.after_pct)
+    : 'measuring…'
+  return lead + ' — ' + before + ' → ' + after
+}
+
+function compactionNote(d) {
+  const line = compactionLine(d && d.last_compaction)
+  if (!line) return null
+  return jsx('p', {
+    key: 'compaction',
+    style: {
+      margin: '0 0 8px',
+      color: 'var(--ui-text-secondary, var(--ui-text-quaternary))',
+      font: '12px/1.4 -apple-system, system-ui, sans-serif'
+    },
+    children: line
+  })
+}
+
+const BASIS_LABELS = {
+  provider: 'provider token count',
+  transcript: 'full transcript',
+  estimate: 'estimate from replies'
 }
 
 function chipTitle(d) {
@@ -30,7 +68,8 @@ function chipTitle(d) {
   const name = d.name || 'This conversation'
   const used = d.age_s > 3600 ? ', last used ' + ago(d.age_s) : ''
   const step = d.next ? ' — ' + d.next : ''
-  return name + ' is ' + Math.round(d.pct) + '% full' + used + step
+  const summary = d.last_compaction && d.last_compaction.recent ? '. ' + compactionLine(d.last_compaction) : ''
+  return name + ' is ' + Math.round(d.pct) + '% full' + used + step + summary
 }
 
 const pctAtom = atom({ pct: null, state: '…', color: 'var(--ui-text-quaternary)', chars_in: 0, window_chars: 0, model: '', tools_chars: 0, skills_chars: 0, conversation_chars: 0, turns: 0 })
@@ -374,12 +413,20 @@ function PanelBody({ d, history }) {
       style: { display: 'flex', gap: 12, alignItems: 'flex-start' },
       children: [
         jsx(GaugeRing, { key: 'ring', pct: null, color: 'var(--ui-text-quaternary)' }),
-        jsx('p', {
+        jsx('div', {
           key: 'copy',
-          style: quiet,
-          children: d.state === 'SUMMARIZED'
-            ? 'Just summarized — measuring again. The old percentage is gone until the next reply.'
-            : (d.hint || 'Send your first message. The gauge fills in after that.')
+          children: [
+            jsx('p', {
+              key: 'text',
+              style: quiet,
+              children: d.state === 'SUMMARIZED'
+                ? 'Just summarized — measuring again. The old percentage is gone until the next measurement.'
+                : (d.hint || 'Send your first message. The gauge fills in after that.')
+            }),
+            d.state === 'SUMMARIZED' && compactionNote(d)
+              ? jsx('div', { key: 'note', style: { marginTop: 6 }, children: compactionNote(d) })
+              : null
+          ]
         })
       ]
         .concat(err ? [jsx('p', {
@@ -415,6 +462,7 @@ function PanelBody({ d, history }) {
       }),
       d.room ? jsx('p', { key: 'room', style: { margin: '0 0 6px', font: '13px/1.4 -apple-system, system-ui, sans-serif' }, children: d.room }) : null,
       d.next ? jsx('p', { key: 'next', style: { margin: '0 0 8px', font: '12px/1.4 -apple-system, system-ui, sans-serif', color: 'var(--ui-text-secondary, var(--ui-text-quaternary))' }, children: d.next }) : null,
+      compactionNote(d),
       accountingBlock(d),
       jsx('details', {
         key: 'how',
@@ -423,7 +471,14 @@ function PanelBody({ d, history }) {
           jsx('summary', { key: 'sum', style: { cursor: 'pointer', font: '12px/1.4 -apple-system, system-ui, sans-serif' }, children: 'How this is calculated' }),
           metaRow('nominal', 'advertised window', formatCount(d.window_tokens != null ? d.window_tokens : d.window_chars)),
           metaRow('effective', 'reliable window', formatCount(d.effective_window_tokens)),
-          metaRow('family', 'model family', (d.model_family || '—') + (d.degradation_factor != null ? ' × ' + d.degradation_factor : ''))
+          metaRow('family', 'model family', (d.model_family || '—') + (d.degradation_factor != null ? ' × ' + d.degradation_factor : '')),
+          metaRow('basis', 'measured from', BASIS_LABELS[d.basis] || '—'),
+          metaRow('session', 'conversation', d.session_id_full || d.session_id || '—'),
+          jsx('p', {
+            key: 'same',
+            style: { margin: '6px 0 0', color: 'var(--ui-text-quaternary)', font: '11px/1.4 -apple-system, system-ui, sans-serif' },
+            children: 'The gauge_check tool reads this same record for this conversation. If the two disagree, they are looking at different conversations, or one of them has not refreshed yet.'
+          })
         ]
       }),
       jsx(HistoryList, { key: 'history', rows: history })
