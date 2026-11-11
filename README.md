@@ -463,7 +463,7 @@ The fill is an estimate unless the provider already counted tokens.
 - When the provider reports `prompt_tokens`, that count is used as-is and the **≈** is omitted.
 - The usable window is the nominal window minus `output_reserve` from `hermes-gauge/config.yaml`. The default reserve is 0. `gauge_check` and the desktop chip then multiply that usable window by the same family factor (the table in the previous section) and score WATCH and FULL on the result. An exact `effective_models` id, an `effective_factors` substring, or a stored factor wins over the family. Thresholds default to WATCH at 60% and FULL at 85% of that effective window.
 - `fallback` is that 200,000 default. It is not a discovered context length. An alias or a preset name is never treated as a window.
-- If detection fails, or compaction invalidated the anchor and no new max has arrived, the gauge shows **—** instead of guessing. The fill never goes above 100% or below 0%.
+- If detection fails, or compaction invalidated the anchor and no new measurement has arrived, the gauge shows **—** instead of guessing. A provider token count or a full transcript is a measurement; a reply, or half a reply from a broken stream, is not. The window that was already detected stays known across a summary. The fill never goes above 100% or below 0%.
 - The bar can still be wrong: this is not the model's tokenizer, a stream only counts what the hooks delivered, and a multi-agent subject is only as wide as its smallest window.
 
 ## Built for the Nous Research hackathon
