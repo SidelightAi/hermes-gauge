@@ -1125,6 +1125,10 @@ function Pane({ ctx }) {
       jsx('div', { key: 'big', style: { font: `800 40px/1 Menlo`, color: d.color, marginBottom: '10px' }, children: d.pct == null ? '—' : `${d.pct}%` }),
       jsx('div', { key: 'barbg', style: { height: '10px', borderRadius: '6px', background: 'var(--ui-stroke-secondary)', overflow: 'hidden', marginBottom: '14px' },
         children: jsx('div', { style: { width: `${bar}%`, height: '100%', background: d.color, transition: 'width .4s' } }) }),
+      d.state === 'SUMMARIZED'
+        ? jsx('p', { key: 'measuring', style: { margin: '0 0 8px', color: 'var(--ui-text-secondary, var(--ui-text-quaternary))', font: '12px/1.4 -apple-system, system-ui, sans-serif' }, children: 'Just summarized — measuring again.' })
+        : null,
+      compactionNote(d),
       accountingBlock(d),
       jsx('div', { key: 'rows', children: [
         row('model', d.model || '—'),
