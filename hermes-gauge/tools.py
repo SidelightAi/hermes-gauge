@@ -874,6 +874,11 @@ def _active_language(explicit=None):
     return _sibling("prefs").resolve_language(choice, explicit)
 
 
+def _say(english, french):
+    """English unless the language setting resolves to French."""
+    return french if _active_language() == "fr" else english
+
+
 def _frozen_after_s(config=None):
     config = config if config is not None else load_config()
     try:
@@ -1041,7 +1046,7 @@ def _gauge_action(action=None, session_id=None, **kwargs):
             "detail": "Alert dismissed. No /compact or /new was sent.",
         }
     executed = _handoff_commands(session_id, commands)
-    typed = " puis ".join(commands)
+    typed = _say(" then ", " puis ").join(commands)
     if executed:
         detail = f"Hermes accepted {typed}."
     else:
@@ -1162,8 +1167,9 @@ def _claim_policy(conn, session_id, fields):
         conn.commit()
         return None
     conn.commit()
+    lang = _active_language()
     message = gauge_math.policy_push_message(
-        _session_label(session_id, _active_language()), verdict, policy
+        _session_label(session_id, lang), verdict, policy, lang
     )
 
     def release():
@@ -1407,8 +1413,10 @@ def _finish(conn, session_id, fields, usage, notify):
     status = fields["status"]
     remaining = fields["remaining_tokens"]
     fields["recommendation"] = _recommendation(status, remaining or 0)
+    config = load_config()
     fields["policy_verdict"] = gauge_math.policy_verdict(
-        fields.get("model"), fields.get("fill_percent"), load_config()
+        fields.get("model"), fields.get("fill_percent"), config,
+        _sibling("prefs").resolve_language((config or {}).get("language")),
     )
     fields["notification"] = None
     fields["in_flight"] = None
@@ -3141,18 +3149,22 @@ def audit_memory_bank(home):
                 findings.append({
                     "severity": "alert",
                     "area": "memory",
-                    "detail": (
+                    "detail": _say(
+                        f"Memory {store['name']}/{label} is at {round(fill * 100, 1)}% "
+                        f"of its budget ({store[chars_key]}/{store[budget_key]} characters).",
                         f"Mémoire {store['name']}/{label} à {round(fill * 100, 1)}% "
-                        f"du budget ({store[chars_key]}/{store[budget_key]} caractères)."
+                        f"du budget ({store[chars_key]}/{store[budget_key]} caractères).",
                     ),
                 })
     for dup in duplicates[:10]:
         findings.append({
             "severity": "warn",
             "area": "memory",
-            "detail": (
+            "detail": _say(
+                f"Near-identical memories ({round(dup['similarity'] * 100)}% of "
+                f"tokens shared): {dup['left']} and {dup['right']}.",
                 f"Mémoires quasi identiques ({round(dup['similarity'] * 100)}% de "
-                f"tokens partagés) : {dup['left']} et {dup['right']}."
+                f"tokens partagés) : {dup['left']} et {dup['right']}.",
             ),
         })
     metrics = {
@@ -3228,7 +3240,9 @@ def _setup_audit(*args, session_id=None, **kwargs):
         "findings": findings,
     }
     if not isinstance(audit["policy_verdict"], dict):
-        audit["policy_verdict"] = gauge_math.policy_verdict(None, None, config)
+        audit["policy_verdict"] = gauge_math.policy_verdict(
+            None, None, config, _active_language()
+        )
     audit["thresholds"] = {"watch": watch, "full": full}
     audit["config_path"] = str(Path(__file__).with_name("config.yaml"))
     audit["effective_factors"] = (config or {}).get("effective_factors") or {}
@@ -3263,18 +3277,32 @@ def _setup_audit(*args, session_id=None, **kwargs):
             flag(
                 "warn",
                 "window",
-                f"Session sur la fenêtre fallback ({fallback}) depuis {turns} tours "
-                f"(seuil {FALLBACK_TURNS_BEFORE_WARN}). "
-                f"Fixer : gauge_set_window(model={model_label!r}, window_tokens=<réel>, "
-                f"session_id={session_id!r}) ou renseigner models.{model_label} dans config.yaml.",
+                _say(
+                    f"Session on the fallback window ({fallback}) for {turns} turns "
+                    f"(limit {FALLBACK_TURNS_BEFORE_WARN}). "
+                    f"Fix: gauge_set_window(model={model_label!r}, window_tokens=<actual>, "
+                    f"session_id={session_id!r}) or set models.{model_label} in config.yaml.",
+                    f"Session sur la fenêtre fallback ({fallback}) depuis {turns} tours "
+                    f"(seuil {FALLBACK_TURNS_BEFORE_WARN}). "
+                    f"Fixer : gauge_set_window(model={model_label!r}, window_tokens=<réel>, "
+                    f"session_id={session_id!r}) ou renseigner models.{model_label} dans config.yaml.",
+                ),
             )
         else:
-            flag("warn", "window", "Fenêtre en 'fallback' (défaut, pas mesuré) — "
-                 "l'estimation peut être fausse. Laisser le hook confirmer ou fixer "
-                 "effective_factors/models dans config.yaml.")
+            flag("warn", "window", _say(
+                "Window is on 'fallback' (default, not measured): the estimate may be "
+                "wrong. Let the hook confirm it, or set effective_factors/models in config.yaml.",
+                "Fenêtre en 'fallback' (défaut, pas mesuré) — "
+                "l'estimation peut être fausse. Laisser le hook confirmer ou fixer "
+                "effective_factors/models dans config.yaml.",
+            ))
     if reading.get("status") == "UNKNOWN":
-        flag("warn", "window", "Ancre invalide : le hook n'a pas confirmé la "
-             "fenêtre pour cette session (compression ou missed turn).")
+        flag("warn", "window", _say(
+            "Invalid anchor: the hook did not confirm the window for this session "
+            "(compaction or a missed turn).",
+            "Ancre invalide : le hook n'a pas confirmé la "
+            "fenêtre pour cette session (compression ou missed turn).",
+        ))
 
     # --- thresholds vs degradation ---------------------------------------
     watch, full = _thresholds(config)
@@ -3285,12 +3313,16 @@ def _setup_audit(*args, session_id=None, **kwargs):
         audit["fill_effective_pct"] = round(ratio_effective * 100, 1)
         audit["fill_nominal_pct"] = round(ratio_nominal * 100, 1)
         if ratio_effective >= watch and ratio_nominal < watch:
-            flag("alert", "sweet-spot",
+            flag("alert", "sweet-spot", _say(
+                 f"The model ({model}) already has {round(ratio_effective * 100, 1)}% of its "
+                 f"reliable window filled (factor {degrade}) while the nominal gauge "
+                 f"shows only {round(ratio_nominal * 100, 1)}%. The nominal gauge is "
+                 f"optimistic: read the WATCH/FULL status on effective_window.",
                  f"Le modèle ({model}) a déjà {round(ratio_effective * 100, 1)}% de sa "
                  f"fenêtre fiable remplie (facteur {degrade}) alors que la jauge "
                  f"nominale n'affiche que {round(ratio_nominal * 100, 1)}% — la jauge "
                  f"nominale est optimiste : le statut WATCH/FULL doit être lu "
-                 f"sur effective_window.")
+                 f"sur effective_window."))
 
     # --- overhead breakdown ----------------------------------------------
     breakdown = reading.get("breakdown") if isinstance(reading, dict) else None
@@ -3301,13 +3333,17 @@ def _setup_audit(*args, session_id=None, **kwargs):
         audit["overhead_pct"] = round(overhead / total * 100, 1)
         audit["breakdown_pct"] = {k: round(int(v or 0) / total * 100, 1) for k, v in breakdown.items()}
         if overhead / total > 0.5:
-            flag("alert", "overhead",
+            flag("alert", "overhead", _say(
+                 f"{audit['overhead_pct']}% of the context is fixed overhead "
+                 f"(system prompt + tools + skills): wasted room on every turn.",
                  f"{audit['overhead_pct']}% du contexte est du fixed overhead "
-                 f"(system prompt + outils + skills) — de l'air perdu à chaque tour.")
+                 f"(system prompt + outils + skills) — de l'air perdu à chaque tour."))
         elif overhead / total > 0.3:
-            flag("warn", "overhead",
+            flag("warn", "overhead", _say(
+                 f"{audit['overhead_pct']}% fixed overhead: check the loaded skills "
+                 f"and the number of tools/plugins.",
                  f"{audit['overhead_pct']}% d'overhead fixe : vérifier les skills "
-                 f"chargées et le nombre d'outils/plugins.")
+                 f"chargées et le nombre d'outils/plugins."))
 
     # Thresholds have to make sense for this model, not in the abstract.
     # WATCH below the fixed overhead never leaves OK. FULL below the
@@ -3326,18 +3362,29 @@ def _setup_audit(*args, session_id=None, **kwargs):
             flag(
                 "alert",
                 "thresholds",
-                f"Seuil WATCH ({watch}) × fenêtre effective ({effective}) = "
-                f"{watch_tokens} < overhead fixe mesuré ({overhead_tokens}). "
-                f"Le seuil WATCH est inatteignable pour ce modèle.",
+                _say(
+                    f"WATCH threshold ({watch}) × effective window ({effective}) = "
+                    f"{watch_tokens} < measured fixed overhead ({overhead_tokens}). "
+                    f"The WATCH threshold cannot be reached for this model.",
+                    f"Seuil WATCH ({watch}) × fenêtre effective ({effective}) = "
+                    f"{watch_tokens} < overhead fixe mesuré ({overhead_tokens}). "
+                    f"Le seuil WATCH est inatteignable pour ce modèle.",
+                ),
             )
         if conversation_tokens and full_tokens < conversation_tokens:
             flag(
                 "alert",
                 "thresholds",
-                f"Seuil FULL ({full}) × fenêtre effective ({effective}) = "
-                f"{full_tokens} < conversation typique de la session "
-                f"({conversation_tokens} tokens). "
-                f"Le seuil FULL est inatteignable pour ce modèle.",
+                _say(
+                    f"FULL threshold ({full}) × effective window ({effective}) = "
+                    f"{full_tokens} < typical conversation of the session "
+                    f"({conversation_tokens} tokens). "
+                    f"The FULL threshold cannot be reached for this model.",
+                    f"Seuil FULL ({full}) × fenêtre effective ({effective}) = "
+                    f"{full_tokens} < conversation typique de la session "
+                    f"({conversation_tokens} tokens). "
+                    f"Le seuil FULL est inatteignable pour ce modèle.",
+                ),
             )
         verdict = audit.get("policy_verdict") or {}
         dull_at = verdict.get("dull_at_applied")
@@ -3349,9 +3396,14 @@ def _setup_audit(*args, session_id=None, **kwargs):
                 flag(
                     "alert",
                     "policy",
-                    f"Seuil débile ({dull_at}) × fenêtre effective ({effective}) = "
-                    f"{dull_tokens} < overhead fixe mesuré ({overhead_tokens}). "
-                    f"Le seuil est inatteignable pour ce modèle.",
+                    _say(
+                        f"Dull threshold ({dull_at}) × effective window ({effective}) = "
+                        f"{dull_tokens} < measured fixed overhead ({overhead_tokens}). "
+                        f"The threshold cannot be reached for this model.",
+                        f"Seuil débile ({dull_at}) × fenêtre effective ({effective}) = "
+                        f"{dull_tokens} < overhead fixe mesuré ({overhead_tokens}). "
+                        f"Le seuil est inatteignable pour ce modèle.",
+                    ),
                 )
 
     # --- files on disk -----------------------------------------------------
@@ -3376,28 +3428,42 @@ def _setup_audit(*args, session_id=None, **kwargs):
                     )
                     files_audit[label + "_code_lines"] = code
                     if code > 400:
-                        flag("alert", "config",
+                        flag("alert", "config", _say(
+                             f"config.yaml holds {code} lines of effective settings, "
+                             f"beyond the stock file: check what was added and whether "
+                             f"it belongs there.",
                              f"config.yaml contient {code} lignes de réglages "
                              f"effectifs — au-delà de la doc d'usine, vérifier ce "
-                             f"qui a été ajouté et si ça vit au bon endroit.")
+                             f"qui a été ajouté et si ça vit au bon endroit."))
                     elif p.stat().st_size > 80_000:
-                        files_audit[label + "_note"] = "gros fichier mais surtout de la doc inline (commentaires) — sain."
+                        files_audit[label + "_note"] = _say(
+                            "large file, but mostly inline documentation (comments): healthy.",
+                            "gros fichier mais surtout de la doc inline (commentaires) — sain.",
+                        )
         mem_dir = home / "memories"
         n, size = dir_stats(mem_dir)
         if size > 120_000:
-            flag("alert", "memory",
+            flag("alert", "memory", _say(
+                 f"Heavy memory bank: {size // 1024} KB across {n} files. "
+                 f"Every session inherits part of it. Purge or consolidate.",
                  f"Banque mémoire lourde : {size // 1024} KB sur {n} fichiers — "
-                 f"chaque session en hérite une partie. Purger/consolider.")
+                 f"chaque session en hérite une partie. Purger/consolider."))
         elif size > 60_000:
-            flag("warn", "memory", f"Mémoire {size // 1024} KB / {n} fichiers : "
-                 f"à consolider avant que ça pèse.")
+            flag("warn", "memory", _say(
+                 f"Memory is {size // 1024} KB across {n} files: consolidate "
+                 f"before it gets heavy.",
+                 f"Mémoire {size // 1024} KB / {n} fichiers : "
+                 f"à consolider avant que ça pèse."))
         files_audit["memories"] = {"files": n, "bytes": size}
         skills_root = home / "skills"
         n, size = dir_stats(skills_root)
         files_audit["skills"] = {"files": n, "bytes": size}
         if size > 400_000:
-            flag("warn", "skills", f"skills/ pèse {size // 1024} KB — seules les "
-                 f"skills pertinentes sont injectées, mais l'index grossit.")
+            flag("warn", "skills", _say(
+                 f"skills/ weighs {size // 1024} KB: only the relevant skills are "
+                 f"injected, but the index keeps growing.",
+                 f"skills/ pèse {size // 1024} KB — seules les "
+                 f"skills pertinentes sont injectées, mais l'index grossit."))
         big = []
         for f in sorted(skills_root.rglob("SKILL.md")):
             s = f.stat().st_size
@@ -3437,10 +3503,13 @@ def _setup_audit(*args, session_id=None, **kwargs):
             "warnings": warnings[:20],
         }
         if not proc.returncode == 0:
-            flag("warn", "doctor",
+            flag("warn", "doctor", _say(
+                 f"hermes doctor reports {len(warnings)} warning(s). Run "
+                 f"`hermes doctor` for the detail (dependencies, tokens, "
+                 f"gateways). gauge_audit does not duplicate them.",
                  f"hermes doctor signale {len(warnings)} avertissement(s) — "
                  f"lancer `hermes doctor` pour le détail (dépendances, tokens, "
-                 f"gateways). gauge_audit ne les duplique pas.")
+                 f"gateways). gauge_audit ne les duplique pas."))
     except Exception as exc:  # doctor absent or slow: audit stays self-contained
         audit["doctor"] = {"ran": False, "error": str(exc)[:120]}
 
@@ -3454,7 +3523,7 @@ def gauge_policy(*args, **_kwargs):
     Read-only. Does not edit ``config.yaml``, does not push, and does not
     compact or rotate a session.
     """
-    resolved = gauge_math.resolve_policy(load_config())
+    resolved = gauge_math.resolve_policy(load_config(), _active_language())
     return {
         "preset": resolved["preset"],
         "preset_applied": resolved["preset_applied"],
@@ -3467,11 +3536,14 @@ def gauge_policy(*args, **_kwargs):
         },
         "sources": resolved["sources"],
         "effect": resolved["effect"],
-        "will_not": (
+        "will_not": _say(
+            "The plugin never compacts a session and never opens a new one, "
+            "whatever the mode. It observes, recommends, and pushes a "
+            "notification. Compaction and the session cycle belong to Hermes core.",
             "Le plugin ne compacte jamais une session et n'en ouvre jamais "
             "une nouvelle, quel que soit le mode. Il observe, recommande, et "
             "pousse une notification. La compaction et le cycle de session "
-            "appartiennent à Hermes core."
+            "appartiennent à Hermes core.",
         ),
     }
 
@@ -3532,11 +3604,14 @@ def gauge_blame(*args, session_id=None, top=8, **_):
     for d in ordered[:top]:
         if d["added_chars"] > 3 * avg and d["added_chars"] > 20_000:
             ratio = round(d["added_chars"] / max(avg, 1))
-            detail = (
+            detail = _say(
+                f"Turn {d['turn_id'][-8:]} added "
+                f"{d['added_chars'] // 1024} KB, {ratio}x the average "
+                f"turn cost ({avg // 1024} KB): main culprit",
                 f"Tour {d['turn_id'][-8:]} a ajouté "
                 f"{d['added_chars'] // 1024} KB, soit "
                 f"{ratio}x le coût moyen d'un tour "
-                f"({avg // 1024} KB) — coupable principal"
+                f"({avg // 1024} KB) — coupable principal",
             )
             culprit = _turn_top_tool(conn, session_id, d["turn_id"])
             finding = {
@@ -3545,7 +3620,10 @@ def gauge_blame(*args, session_id=None, top=8, **_):
                 "added_chars": d["added_chars"],
             }
             if culprit:
-                detail += f" : {culprit[0]} ({culprit[1]} caractères)."
+                detail += _say(
+                    f", via {culprit[0]} ({culprit[1]} characters).",
+                    f" : {culprit[0]} ({culprit[1]} caractères).",
+                )
                 finding["tool_name"] = culprit[0]
             else:
                 detail += "."
@@ -3557,23 +3635,31 @@ def gauge_blame(*args, session_id=None, top=8, **_):
             "severity": "warn",
             "tool_name": top_tool["tool_name"],
             "result_chars": top_tool["result_chars"],
-            "detail": (
+            "detail": _say(
+                f"Main culprit: {top_tool['tool_name']} "
+                f"({top_tool['result_chars']} characters over {top_tool['calls']} call(s)).",
                 f"Coupable principal : {top_tool['tool_name']} "
-                f"({top_tool['result_chars']} caractères sur {top_tool['calls']} appel(s))."
+                f"({top_tool['result_chars']} caractères sur {top_tool['calls']} appel(s)).",
             ),
         })
     heavy = [d for d in deltas if d["added_chars"] > avg * 2]
     if attribution == "tool-level":
-        note = (
+        note = _say(
+            "Every turn replays the whole conversation: added_chars is the actual "
+            "cost of that turn. by_tool sums the tool_result lengths read from "
+            "the payload: counting only, no invented names.",
             "Chaque tour rejoue toute la conversation : added_chars est le "
             "coût réel de ce tour. by_tool somme les longueurs de tool_result "
-            "lues dans la payload — comptage uniquement, aucun nom inventé."
+            "lues dans la payload — comptage uniquement, aucun nom inventé.",
         )
     else:
-        note = (
+        note = _say(
+            "Every turn replays the whole conversation: added_chars is the actual "
+            "cost of that turn. Attribution is turn-only: the payload carried "
+            "no tool name.",
             "Chaque tour rejoue toute la conversation : added_chars est le "
             "coût réel de ce tour. attribution turn-only : la payload n'a pas "
-            "fourni de nom d'outil."
+            "fourni de nom d'outil.",
         )
     return {
         "session_id": session_id,

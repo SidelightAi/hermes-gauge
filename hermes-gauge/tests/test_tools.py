@@ -723,7 +723,7 @@ def test_watch_and_full_push_once_per_status_and_honor_cooldown(monkeypatch):
     assert first_push[0]["session_id"] == "release-review"
     # One bubble: the WATCH sentence, then the dull recommendation under it.
     assert first_push[0]["message"].startswith(_watch_text("release-review"))
-    assert "seuil débile" in first_push[0]["message"]
+    assert "dull threshold" in first_push[0]["message"]
 
     tools.gauge_check(session_id="release-review")
     assert len(_status_pushes(sent)) == 1
@@ -1006,8 +1006,8 @@ def test_default_route_keeps_the_alert_payload_exactly_as_before(tmp_path, monke
         {
             "message": (
                 _watch_text("sess")
-                + "\n\nHermes Gauge — session sess : 70 % effectif, seuil débile 70 % : "
-                "recommandé = compacter, puis nouvelle session."
+                + "\n\nHermes Gauge — session sess: 70% effective, dull threshold 70%: "
+                "recommended = compact, then new session."
             ),
             "session_id": "sess",
         },
@@ -1033,8 +1033,8 @@ def test_custom_route_goes_through_hermes_send_not_the_session(tmp_path, monkeyp
         (
             "telegram:-1001234567890",
             _full_text("sess")
-            + "\n\nHermes Gauge — session sess : 85 % effectif, seuil débile 70 % : "
-            "recommandé = compacter, puis nouvelle session.",
+            + "\n\nHermes Gauge — session sess: 85% effective, dull threshold 70%: "
+            "recommended = compact, then new session.",
         ),
     ]
     assert posts == []
@@ -1819,7 +1819,7 @@ def test_a_turn_that_crosses_watch_and_the_dull_line_sends_one_bubble(monkeypatc
     assert reading["policy_verdict"]["dull_reached"] is True
     assert len(sent) == 1
     message = sent[0]["message"]
-    assert "only watches" in message and "seuil débile 55 %" in message
+    assert "only watches" in message and "dull threshold 55%" in message
     assert message.count("Hermes Gauge") == 2
 
 
@@ -2167,7 +2167,7 @@ def test_gauge_audit_on_a_temp_database_flags_setup_and_memory(tmp_path, monkeyp
     watch = next(f for f in audit["findings"] if f["area"] == "thresholds" and "WATCH" in f["detail"])
     full = next(f for f in audit["findings"] if f["area"] == "thresholds" and "FULL" in f["detail"])
     assert watch["severity"] == "alert"
-    assert "inatteignable" in watch["detail"]
+    assert "cannot be reached" in watch["detail"]
     assert full["severity"] == "alert"
 
     memory = audit["memory"]
@@ -2194,7 +2194,7 @@ def test_gauge_audit_on_a_temp_database_flags_setup_and_memory(tmp_path, monkeyp
         for finding in audit["findings"]
     )
     assert any(
-        finding["severity"] == "warn" and "quasi identiques" in finding["detail"]
+        finding["severity"] == "warn" and "Near-identical" in finding["detail"]
         for finding in audit["findings"]
     )
     assert audit["status"] == "ALERT"
@@ -2209,7 +2209,7 @@ def test_memory_duplicates_need_more_than_80_percent_shared_tokens(tmp_path):
     metrics, findings = tools.audit_memory_bank(tmp_path)
     assert metrics["duplicate_count"] == 0
     assert metrics["max_fill_ratio"] is None
-    assert not any("quasi identiques" in finding["detail"] for finding in findings)
+    assert not any("Near-identical" in finding["detail"] for finding in findings)
 
     (memories / "MEMORY.md").write_text("unrelated heading", encoding="utf-8")
     (memories / "USER.md").write_text(left + "\n§\n" + left, encoding="utf-8")
@@ -2249,7 +2249,7 @@ def _policy_pushes(sent):
     # "effectif", so that word no longer distinguishes the two pushes.
     return [
         item for item in sent
-        if "seuil débile" in item["message"]
+        if "dull threshold" in item["message"]
     ]
 
 
@@ -2326,12 +2326,12 @@ def test_policy_verdict_names_the_model_tier_and_audit_never_acts(monkeypatch):
     assert verdict["dull_reached"] is True
     assert verdict["fill_effective_pct"] == 60.0
     assert verdict["recommendation"] == (
-        "60 % effectif, seuil débile 55 % pour ce modèle flash : "
-        "recommandé = compacter, puis nouvelle session."
+        "60% effective, dull threshold 55% for this model flash: "
+        "recommended = compact, then new session."
     )
     pushes = _policy_pushes(sent)
     assert len(pushes) == 1
-    assert "action recommandée" not in pushes[0]["message"]
+    assert "recommended action" not in pushes[0]["message"]
     assert pushes[0]["message"].endswith(verdict["recommendation"])
     reasons = [event["reason"] for event in tools.compaction_events("flash")]
     assert "compact" not in reasons
@@ -2348,7 +2348,7 @@ def test_policy_verdict_names_the_model_tier_and_audit_never_acts(monkeypatch):
     )
     under = tools.gauge_check(session_id="flash")
     assert under["policy_verdict"]["dull_reached"] is False
-    assert "pas encore atteint" in under["policy_verdict"]["recommendation"]
+    assert "not reached yet" in under["policy_verdict"]["recommendation"]
     clock["t"] += 10 * 60
     tools.record_llm_call(
         "flash", 60_000, model="gemini-2.5-flash", replace=True,
@@ -2369,7 +2369,7 @@ def test_policy_verdict_names_the_model_tier_and_audit_never_acts(monkeypatch):
     )
     tools.gauge_check(session_id="flash")
     assert len(_policy_pushes(sent)) == 2
-    assert all("action recommandée" not in item["message"] for item in _policy_pushes(sent))
+    assert all("recommended action" not in item["message"] for item in _policy_pushes(sent))
 
 
 def test_act_mode_pushes_a_recommendation_and_does_not_execute_it(monkeypatch):
@@ -2386,8 +2386,8 @@ def test_act_mode_pushes_a_recommendation_and_does_not_execute_it(monkeypatch):
     assert reading["policy_verdict"]["dull_reached"] is True
     pushes = _policy_pushes(sent)
     assert len(pushes) == 1
-    assert "action recommandée" in pushes[0]["message"]
-    assert "compacte / nouvelle session recommandée" in pushes[0]["message"]
+    assert "recommended action" in pushes[0]["message"]
+    assert "compact / new session recommended" in pushes[0]["message"]
     reasons = [event["reason"] for event in tools.compaction_events("sess")]
     assert "compact" not in reasons
     assert "new_session" not in reasons
@@ -2423,7 +2423,7 @@ def test_unreachable_dull_threshold_is_a_finding(tmp_path, monkeypatch):
     assert audit["overhead_tokens"] == 1_000
     finding = next(item for item in audit["findings"] if item["area"] == "policy")
     assert finding["severity"] == "alert"
-    assert "inatteignable" in finding["detail"]
+    assert "cannot be reached" in finding["detail"]
     assert "100" in finding["detail"]
     assert "1000" in finding["detail"]
 
@@ -2493,7 +2493,7 @@ def test_gauge_blame_attributes_named_tools_and_falls_back_to_turns():
         {"tool_name": "search", "result_chars": 40, "calls": 1},
     ]
     assert any(
-        "principal" in finding["detail"].lower() and "read_file" in finding["detail"]
+        "culprit" in finding["detail"].lower() and "read_file" in finding["detail"]
         for finding in full["findings"]
     )
 
@@ -2561,7 +2561,7 @@ def test_gauge_blame_cites_the_tool_on_the_heavy_turn():
     assert blame["by_tool"][0]["tool_name"] == "read_file"
     finding = next(item for item in blame["findings"] if item.get("turn_id") == "t4")
     assert finding["tool_name"] == "read_file"
-    assert "coupable principal" in finding["detail"]
+    assert "main culprit" in finding["detail"]
     assert "read_file" in finding["detail"]
 
 
@@ -2589,7 +2589,7 @@ def test_policy_preset_is_overridden_by_explicit_keys_and_defaults_fill_gaps():
     assert resolved["sources"]["on_dull"] == "default"
     assert resolved["cooldown_minutes"] == 12
     assert resolved["sources"]["cooldown_minutes"] == "config"
-    assert "ne compacte jamais" in resolved["effect"]
+    assert "never compacts" in resolved["effect"]
 
     prudent = tools.gauge_math.resolve_policy({"policy": {
         "preset": "prudent",
@@ -2605,15 +2605,15 @@ def test_policy_preset_is_overridden_by_explicit_keys_and_defaults_fill_gaps():
     assert prudent["dull_at"]["mini"] == 0.45
     assert prudent["cooldown_minutes"] == 30
     assert prudent["sources"]["cooldown_minutes"] == "preset:prudent"
-    assert "action recommandée" in prudent["effect"]
-    assert "ne compacte jamais" in prudent["effect"]
+    assert "recommended action" in prudent["effect"]
+    assert "never compacts" in prudent["effect"]
 
     unknown = tools.gauge_math.resolve_policy({"policy": {"preset": "nope"}})
     assert unknown["preset_known"] is False
     assert unknown["preset_applied"] == "standard"
     assert unknown["mode"] == "audit"
     assert unknown["dull_at"]["default"] == 0.70
-    assert "inconnu" in unknown["effect"]
+    assert "is unknown" in unknown["effect"]
 
 
 def test_gauge_policy_reports_the_active_preset_and_writes_nothing(monkeypatch):
@@ -2633,9 +2633,9 @@ def test_gauge_policy_reports_the_active_preset_and_writes_nothing(monkeypatch):
     assert report["sources"]["mode"] == "preset:standard"
     assert report["sources"]["dull_at.default"] == "preset:standard"
     assert report["sources"]["cooldown_minutes"] == "preset:standard"
-    assert "observe et recommande" in report["effect"]
-    assert "ne compacte jamais" in report["effect"]
-    assert "ne compacte jamais" in report["will_not"]
+    assert "only observes and recommends" in report["effect"]
+    assert "never compacts" in report["effect"]
+    assert "never compacts" in report["will_not"]
     assert "Hermes core" in report["will_not"]
 
     monkeypatch.setattr(tools, "load_config", lambda: _config(policy={"preset": "prudent"}))
@@ -2830,3 +2830,32 @@ def test_audit_still_reads_back_a_snapshot_written_without_a_window(monkeypatch)
     history = tools.gauge_audit(format="json")["sessions"][0]["history"]
     assert [e["inferred"] for e in history] == [False, True]
     assert history[1]["fill_percent"] == 75.0
+
+
+def test_policy_wording_is_english_first_and_french_on_request(monkeypatch):
+    math = tools.gauge_math
+    config = _config(models={})
+    english = math.policy_verdict("flash", 60.0, config)
+    assert english["recommendation"] == (
+        "60% effective, dull threshold 55% for this model flash: "
+        "recommended = compact, then new session."
+    )
+    french = math.policy_verdict("flash", 60.0, config, "fr")
+    assert french["recommendation"] == (
+        "60 % effectif, seuil débile 55 % pour ce modèle flash : "
+        "recommandé = compacter, puis nouvelle session."
+    )
+    assert "never compacts" in math.resolve_policy(config)["effect"]
+    assert "ne compacte jamais" in math.resolve_policy(config, "fr")["effect"]
+    act = {"mode": "act", "recommendation": "x"}
+    assert "recommended action" in math.policy_push_message("s", act, {}, "en")
+    assert "action recommandée" in math.policy_push_message("s", act, {}, "fr")
+
+
+def test_setup_findings_follow_the_language_setting(monkeypatch):
+    monkeypatch.setattr(tools, "load_config", lambda: _config(language="fr"))
+    assert tools._say("English", "Français") == "Français"
+    monkeypatch.setattr(tools, "load_config", lambda: _config(language="en"))
+    assert tools._say("English", "Français") == "English"
+    monkeypatch.setattr(tools, "load_config", lambda: _config())
+    assert tools._say("English", "Français") == "English"

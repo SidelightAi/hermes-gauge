@@ -1,6 +1,6 @@
-"""Backend HTTP pour la moitié desktop du plugin hermes-gauge.
+"""HTTP backend for the desktop half of the hermes-gauge plugin.
 
-Sert /api/plugins/hermes-gauge/* depuis l'app Hermes Desktop.
+Serves /api/plugins/hermes-gauge/* to the Hermes Desktop app.
 """
 from __future__ import annotations
 
@@ -203,7 +203,7 @@ async def _json_body(request) -> dict:
 @router.get("/")
 @router.get("/check")
 def _api_check(session_id: str = "") -> dict:
-    """Point d'entrée FastAPI monté sous /api/plugins/hermes-gauge (JSON strict)."""
+    """FastAPI entry point mounted under /api/plugins/hermes-gauge (strict JSON)."""
     try:
         body = {"session_id": session_id} if session_id else None
         return json.loads(handle("GET", "/check", body))
@@ -212,7 +212,7 @@ def _api_check(session_id: str = "") -> dict:
 
 
 def handle(method: str, path: str, body: dict | None = None) -> str:
-    """Point d'entrée appelé par le gateway pour /api/plugins/hermes-gauge."""
+    """Entry point the gateway calls for /api/plugins/hermes-gauge."""
     query = ""
     if "?" in path:
         path, query = path.split("?", 1)
@@ -274,10 +274,13 @@ def _api_audit(limit: int = 10, lang: str = "en", session_id: str = "") -> dict:
 
 
 @router.get("/report/incidents")
-def _api_incidents(lang: str = "fr", days: str = "", format: str = "json") -> dict:
-    """The incident report as data. ``format=html`` adds the page as ``html``."""
+def _api_incidents(lang: str = "", days: str = "", format: str = "json") -> dict:
+    """The incident report as data. ``format=html`` adds the page as ``html``.
+
+    No ``lang`` follows the language setting, which is English unless it says French.
+    """
     return _safe(lambda: _tools().gauge_incidents(
-        lang=lang, days=days or None, format="html" if format == "html" else "json"
+        lang=lang or None, days=days or None, format="html" if format == "html" else "json"
     ))
 
 
@@ -288,7 +291,7 @@ async def _api_incidents_write(request: Request) -> dict:
 
     def build():
         report = _tools().gauge_incidents(
-            lang=body.get("lang") or "fr", days=body.get("days"), write=True
+            lang=body.get("lang") or None, days=body.get("days"), write=True
         )
         if report.get("path"):
             report["url"] = Path(report["path"]).as_uri()

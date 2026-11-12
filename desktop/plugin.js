@@ -509,7 +509,7 @@ function failure(e) {
   return String(e && e.message || e).slice(0, 200)
 }
 
-// The incident page is French by default; follow the system language.
+// The incident page follows the saved language, then the system language, else English.
 function reportLang() {
   const saved = typeof pctAtom.get === 'function' ? pctAtom.get() : null
   if (saved && (saved.language === 'fr' || saved.language === 'en')) return saved.language

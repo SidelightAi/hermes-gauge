@@ -348,8 +348,8 @@ DULL_AT_DEFAULTS = {"default": 0.70, "flash": 0.55, "mini": 0.60}
 ON_DULL_DEFAULT = ["compact", "new_session"]
 POLICY_COOLDOWN_DEFAULT = 60
 _DULL_ACTION_WORDS = {
-    "compact": "compacter",
-    "new_session": "nouvelle session",
+    "en": {"compact": "compact", "new_session": "new session"},
+    "fr": {"compact": "compacter", "new_session": "nouvelle session"},
 }
 
 
@@ -720,32 +720,50 @@ def _apply_policy_layer(state, sources, body, source):
         sources["cooldown_minutes"] = source
 
 
-def _policy_effect(mode, applied, known, requested):
+def _is_french(lang):
+    return str(lang or "").strip().lower().startswith("fr")
+
+
+def _policy_effect(mode, applied, known, requested, lang="en"):
+    french = _is_french(lang)
     if mode == "act":
         text = (
             "Mode act : au franchissement du seuil débile, le plugin pousse "
             "une notification « action recommandée » (compacter ou ouvrir une "
             "nouvelle session). Il ne l'exécute pas."
+            if french else
+            "Act mode: when the dull threshold is crossed, the plugin pushes a "
+            "\"recommended action\" notification (compact or open a new "
+            "session). It does not run it."
         )
     else:
         text = (
             "Mode audit : le plugin observe et recommande seulement. "
             "Au franchissement du seuil débile, une notification de "
             "recommandation part une fois, puis le cooldown la retient."
+            if french else
+            "Audit mode: the plugin only observes and recommends. When the "
+            "dull threshold is crossed, one recommendation notification goes "
+            "out, then the cooldown holds it back."
         )
     text += (
         " Il ne compacte jamais une session et n'en ouvre jamais une "
         "nouvelle, dans aucun mode."
+        if french else
+        " It never compacts a session and never opens a new one, in any mode."
     )
     if not known:
         text += (
             f" Le preset « {requested} » est inconnu : "
             f"« {applied} » s'applique à la place."
+            if french else
+            f" The preset \"{requested}\" is unknown: "
+            f"\"{applied}\" applies instead."
         )
     return text
 
 
-def resolve_policy(config):
+def resolve_policy(config, lang="en"):
     """Active policy: defaults, then the named preset, then explicit keys.
 
     ``mode`` other than ``audit`` or ``act`` stays ``audit``. Dull
@@ -783,7 +801,7 @@ def resolve_policy(config):
         "preset_applied": applied,
         "preset_known": known,
         "sources": sources,
-        "effect": _policy_effect(state["mode"], applied, known, requested),
+        "effect": _policy_effect(state["mode"], applied, known, requested, lang),
     }
 
 
@@ -810,55 +828,68 @@ def matched_dull(model, dull_map):
     return fallback, "default"
 
 
-def _dull_actions_phrase(on_dull):
-    words = [_DULL_ACTION_WORDS.get(item, item) for item in on_dull or []]
+def _dull_actions_phrase(on_dull, lang="en"):
+    french = _is_french(lang)
+    table = _DULL_ACTION_WORDS["fr" if french else "en"]
+    words = [table.get(item, item) for item in on_dull or []]
     if not words:
-        words = [_DULL_ACTION_WORDS["compact"]]
+        words = [table["compact"]]
     phrase = words[0]
     for word in words[1:]:
-        phrase += ", puis " + word
+        phrase += (", puis " if french else ", then ") + word
     return phrase
 
 
-def policy_push_message(session_id, verdict, policy):
+def policy_push_message(session_id, verdict, policy, lang="en"):
     """One notification. Wording depends on mode; neither mode executes it.
 
     ``audit`` repeats the recommendation. ``act`` labels the same push as
     an explicit recommended action. Hermes core is the only thing that
     can compact or open a session.
     """
+    french = _is_french(lang)
     if verdict.get("mode") == "act":
         actions = list((policy or {}).get("on_dull") or ON_DULL_DEFAULT)
-        if actions == ["compact", "new_session"]:
-            asked = "compacte / nouvelle session recommandée"
+        if french:
+            names = {"compact": "compacte", "new_session": "nouvelle session"}
+            suffix, generic = " recommandée", "action recommandée"
         else:
-            parts = []
-            for item in actions:
-                if item == "compact":
-                    parts.append("compacte")
-                elif item == "new_session":
-                    parts.append("nouvelle session")
-                else:
-                    parts.append(item)
-            asked = (" / ".join(parts) + " recommandée") if parts else "action recommandée"
+            names = {"compact": "compact", "new_session": "new session"}
+            suffix, generic = " recommended", "action recommended"
+        if actions == ["compact", "new_session"]:
+            asked = " / ".join((names["compact"], names["new_session"])) + suffix
+        else:
+            parts = [names.get(item, item) for item in actions]
+            asked = (" / ".join(parts) + suffix) if parts else generic
+        if french:
+            return (
+                f"Hermes Gauge — action recommandée — session {session_id} : "
+                f"{asked}. {verdict.get('recommendation')}"
+            )
         return (
-            f"Hermes Gauge — action recommandée — session {session_id} : "
+            f"Hermes Gauge — recommended action — session {session_id}: "
             f"{asked}. {verdict.get('recommendation')}"
         )
-    return f"Hermes Gauge — session {session_id} : {verdict.get('recommendation')}"
+    if french:
+        return f"Hermes Gauge — session {session_id} : {verdict.get('recommendation')}"
+    return f"Hermes Gauge — session {session_id}: {verdict.get('recommendation')}"
 
 
-def policy_verdict(model, fill_percent, config):
+def policy_verdict(model, fill_percent, config, lang="en"):
     """What to tell the user. Never an instruction the plugin will run.
 
     ``fill_percent`` is already the fill of the effective window
     (``compose`` scores WATCH/FULL against that window).
     """
-    policy = resolve_policy(config)
+    french = _is_french(lang)
+    policy = resolve_policy(config, lang)
     threshold, label = matched_dull(model, policy["dull_at"])
     dull_txt = percent_label(round(threshold * 100, 1)) or "0"
-    model_bit = f" pour ce modèle {label}" if label != "default" else ""
-    actions = _dull_actions_phrase(policy["on_dull"])
+    if label == "default":
+        model_bit = ""
+    else:
+        model_bit = f" pour ce modèle {label}" if french else f" for this model {label}"
+    actions = _dull_actions_phrase(policy["on_dull"], lang)
     if fill_percent is None:
         return {
             "mode": policy["mode"],
@@ -868,6 +899,9 @@ def policy_verdict(model, fill_percent, config):
             "recommendation": (
                 f"Fenêtre non confirmée, seuil débile {dull_txt} %{model_bit} : "
                 "pas évalué."
+                if french else
+                f"Window not confirmed, dull threshold {dull_txt}%{model_bit}: "
+                "not evaluated."
             ),
         }
     try:
@@ -884,11 +918,17 @@ def policy_verdict(model, fill_percent, config):
         recommendation = (
             f"{fill_txt} % effectif, seuil débile {dull_txt} %{model_bit} : "
             f"recommandé = {actions}."
+            if french else
+            f"{fill_txt}% effective, dull threshold {dull_txt}%{model_bit}: "
+            f"recommended = {actions}."
         )
     else:
         recommendation = (
             f"{fill_txt} % effectif, seuil débile {dull_txt} %{model_bit} : "
             f"pas encore atteint (recommandé = {actions})."
+            if french else
+            f"{fill_txt}% effective, dull threshold {dull_txt}%{model_bit}: "
+            f"not reached yet (recommended = {actions})."
         )
     return {
         "mode": policy["mode"],
