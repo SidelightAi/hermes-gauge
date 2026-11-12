@@ -1059,7 +1059,7 @@ function Chip({ ctx }) {
           jsx('span', {
             key: 'title',
             style: { font: '600 12px/1.2 -apple-system, system-ui, sans-serif' },
-            children: 'Context Gauge v0.6.1'
+            children: 'Context Gauge v0.6.2'
           }),
           jsx('button', {
             key: 'close',

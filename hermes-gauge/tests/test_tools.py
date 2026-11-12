@@ -658,8 +658,8 @@ def test_manifest_lists_the_hooks_and_leaves_the_demo_out():
     ):
         assert hook in manifest
     assert "webapp-demo" not in manifest
-    assert "version: 0.6.1" in manifest
-    assert "version: 0.6.1" in nested
+    assert "version: 0.6.2" in manifest
+    assert "version: 0.6.2" in nested
     # post_compaction and ctx.post_message first ship in Hermes 0.22.3.
     assert 'requires_hermes: ">=0.22.3"' in manifest
     assert 'requires_hermes: ">=0.22.3"' in nested
