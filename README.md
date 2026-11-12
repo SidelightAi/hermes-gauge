@@ -388,7 +388,7 @@ The bare name `hermes plugins install hermes-gauge` is the catalog form. It inst
 make demo
 ```
 
-That serves http://127.0.0.1:8788 (`GAUGE_PORT=8788`; 8787 is left free), seeds four fixture sessions at 12%, 38%, 63%, and 92%, and checks that `/` and `/health` return HTTP 200. Hermes does not need to be installed.
+That serves http://127.0.0.1:8788 (`GAUGE_PORT=8788`; 8787 is left free), seeds four fixture sessions at 12%, 38%, 63%, and 92%, and checks that `/` and `/health` return HTTP 200. Hermes does not need to be installed. It listens on `127.0.0.1` only; `--host` needs a `--token` (see `webapp-demo/README.md`).
 
 `make check` runs the tests, starts the server, and hits `/`, `/health`, `/api/gauge`, and `/api/gauge?demo=1`.
 

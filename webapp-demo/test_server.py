@@ -8,6 +8,8 @@ import threading
 from pathlib import Path
 from urllib.request import urlopen
 
+import pytest
+
 HERE = Path(__file__).resolve().parent
 
 
@@ -30,8 +32,8 @@ def test_server_imports_stdlib_only():
         elif isinstance(node, ast.ImportFrom) and node.module:
             modules.add(node.module.split(".")[0])
     assert modules <= {
-        "argparse", "importlib", "json", "os", "sqlite3", "threading",
-        "time", "webbrowser", "http", "urllib",
+        "argparse", "hmac", "importlib", "ipaddress", "json", "os", "sqlite3",
+        "threading", "time", "webbrowser", "http", "urllib",
     }
 
 
@@ -253,6 +255,90 @@ def test_http_root_and_health(monkeypatch):
             assert response.status == 200
             fills = [s["fill_percent"] for s in json.loads(response.read())["sessions"]]
             assert fills == [92.0, 63.0, 38.0, 12.0]
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=2)
+
+
+def test_loopback_addresses_are_told_apart_from_the_rest():
+    for host in ("127.0.0.1", "127.0.0.2", "localhost", "::1"):
+        assert server.is_loopback(host), host
+    for host in ("0.0.0.0", "192.168.1.20", "10.0.0.5", "example.com", ""):
+        assert not server.is_loopback(host), host
+
+
+def test_serve_binds_loopback_by_default(monkeypatch):
+    bound = {}
+
+    class Stop(Exception):
+        pass
+
+    def fake_http_server(address, handler):
+        bound["address"] = address
+        raise Stop
+
+    monkeypatch.setattr(server, "HTTPServer", fake_http_server)
+    with pytest.raises(Stop):
+        server.serve(0)
+    assert bound["address"] == ("127.0.0.1", 0)
+
+
+def test_listening_beyond_this_machine_needs_a_token(monkeypatch):
+    monkeypatch.setattr(server, "HTTPServer", lambda *a, **k: pytest.fail("must not bind"))
+    for host in ("0.0.0.0", "192.168.1.20"):
+        with pytest.raises(SystemExit) as refused:
+            server.serve(0, host=host)
+        assert "token" in str(refused.value)
+    with pytest.raises(SystemExit):
+        server.main(["--host", "0.0.0.0"])
+
+
+def _serve_with_token(monkeypatch, token):
+    monkeypatch.setenv("GAUGE_FIXTURE", "1")
+    monkeypatch.setenv("GAUGE_QUIET", "1")
+    handler = type("TokenHandler", (server.Handler,), {"token": token})
+    httpd = server.HTTPServer(("127.0.0.1", 0), handler)
+    thread = threading.Thread(target=httpd.serve_forever, daemon=True)
+    thread.start()
+    return httpd, thread, f"http://127.0.0.1:{httpd.server_address[1]}"
+
+
+def _status(url, headers=None):
+    from urllib.error import HTTPError
+    from urllib.request import Request
+
+    try:
+        with urlopen(Request(url, headers=headers or {}), timeout=2) as response:
+            return response.status, response.read(), response.headers
+    except HTTPError as err:
+        return err.code, err.read(), err.headers
+
+
+def test_a_token_gates_every_route_and_leaks_no_session_data(monkeypatch):
+    httpd, thread, base = _serve_with_token(monkeypatch, "s3cret")
+    try:
+        for path in ("/", "/health", "/api/gauge", "/api/gauge?demo=1"):
+            code, body, _headers = _status(base + path)
+            assert code == 401, path
+            assert b"sessions" not in body and b"session_id" not in body
+        assert _status(base + "/api/gauge", {"Authorization": "Bearer wrong"})[0] == 401
+        assert _status(base + "/api/gauge?token=wrong")[0] == 401
+        code, body, _headers = _status(base + "/api/gauge", {"Authorization": "Bearer s3cret"})
+        assert code == 200 and json.loads(body)["sessions"]
+    finally:
+        httpd.shutdown()
+        thread.join(timeout=2)
+
+
+def test_the_token_in_the_url_becomes_a_cookie_the_page_can_reuse(monkeypatch):
+    httpd, thread, base = _serve_with_token(monkeypatch, "s3cret")
+    try:
+        code, _body, headers = _status(base + "/?token=s3cret")
+        assert code == 200
+        cookie = headers["Set-Cookie"]
+        assert cookie.startswith("gauge_token=s3cret") and "HttpOnly" in cookie and "SameSite=Strict" in cookie
+        assert _status(base + "/api/gauge", {"Cookie": "gauge_token=s3cret"})[0] == 200
+        assert _status(base + "/api/gauge", {"Cookie": "gauge_token=nope"})[0] == 401
     finally:
         httpd.shutdown()
         thread.join(timeout=2)

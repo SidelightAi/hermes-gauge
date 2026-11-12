@@ -14,6 +14,16 @@ Default port is **8787**. From the repo root, `make demo` uses port **8788** (`G
 GAUGE_PORT=8788 python3 server.py
 ```
 
+## Who can reach it
+
+The server listens on `127.0.0.1` only. In its default mode it serves live per-session data (ids, models, fill), so it does not leave your machine unless you say so. `--host` names another interface and then `--token` (or `GAUGE_TOKEN`) is mandatory; without a token the server refuses to start.
+
+```bash
+python3 server.py --host 0.0.0.0 --token "$(openssl rand -hex 16)"
+```
+
+Every request must carry the token: `Authorization: Bearer <token>`, or `?token=<token>` in the URL, which also sets a cookie so the page keeps working. A request without it gets a 401 and no data.
+
 ## Endpoints
 
 - `GET /` — the dashboard

@@ -9,10 +9,18 @@ Stdlib only. Three ways to read the gauge:
   It is the default when Hermes is not installed, and what ``make demo`` serves.
 
 ``GET /health`` is there so a cold start can prove the process is up.
+
+The server listens on 127.0.0.1 only. In its default mode it serves live
+per-session data (ids, models, fill), so it leaves the machine only when you ask
+for it: ``--host`` names the interface and ``--token`` (or ``GAUGE_TOKEN``) is
+then mandatory. Every request must carry the token, as ``Authorization: Bearer``,
+``?token=`` or the cookie that ``?token=`` sets for the browser.
 """
 
 import argparse
+import hmac
 import importlib.util
+import ipaddress
 import json
 import os
 import sqlite3
@@ -21,7 +29,7 @@ import time
 import webbrowser
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs, urlparse
-from urllib.request import urlopen
+from urllib.request import Request, urlopen
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
@@ -62,6 +70,28 @@ def db_path():
 
 def port_from_env():
     return int(os.environ.get("GAUGE_PORT", "8787"))
+
+
+DEFAULT_HOST = "127.0.0.1"
+TOKEN_COOKIE = "gauge_token"
+
+
+def is_loopback(host):
+    """True for ``localhost`` and the 127.0.0.0/8 range: addresses only this machine can reach."""
+    if str(host).strip().lower() == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def require_token_off_loopback(host, token):
+    """Refuse to serve beyond this machine without a token."""
+    if not is_loopback(host) and not token:
+        raise SystemExit(
+            f"refusing to listen on {host} without a token: pass --token (or set GAUGE_TOKEN)"
+        )
 
 
 def _math():
@@ -437,17 +467,51 @@ def dispatch(path):
 
 
 class Handler(BaseHTTPRequestHandler):
-    def _send(self, code, body, ctype="application/json"):
+    # None means no token is asked: only ever the case on a loopback address.
+    token = None
+
+    def _send(self, code, body, ctype="application/json", headers=()):
         data = body if isinstance(body, bytes) else json.dumps(body).encode()
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(data)))
+        for name, value in headers:
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(data)
 
+    def _supplied_token(self):
+        """The token this request carries, and whether it came in the URL."""
+        auth = self.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            return auth[len("Bearer "):].strip(), False
+        query = parse_qs(urlparse(self.path).query).get("token")
+        if query:
+            return query[0], True
+        for part in self.headers.get("Cookie", "").split(";"):
+            name, _, value = part.strip().partition("=")
+            if name == TOKEN_COOKIE and value:
+                return value, False
+        return None, False
+
     def do_GET(self):
+        headers = ()
+        if self.token:
+            supplied, from_url = self._supplied_token()
+            if supplied is None or not hmac.compare_digest(
+                supplied.encode(), str(self.token).encode()
+            ):
+                self._send(401, {"error": "token required"})
+                return
+            if from_url:
+                # The page fetches /api/gauge without the query string, so the
+                # browser keeps the token as a cookie scoped to this server.
+                headers = ((
+                    "Set-Cookie",
+                    f"{TOKEN_COOKIE}={self.token}; Path=/; HttpOnly; SameSite=Strict",
+                ),)
         code, body, ctype = dispatch(self.path)
-        self._send(code, body, ctype)
+        self._send(code, body, ctype, headers)
 
     def log_message(self, fmt, *args):
         if os.environ.get("GAUGE_QUIET") == "1":
@@ -455,12 +519,13 @@ class Handler(BaseHTTPRequestHandler):
         super().log_message(fmt, *args)
 
 
-def _get(url):
-    with urlopen(url, timeout=2) as response:
+def _get(url, token=None):
+    request = Request(url, headers={"Authorization": f"Bearer {token}"} if token else {})
+    with urlopen(request, timeout=2) as response:
         return response.status, response.read()
 
 
-def probe(base):
+def probe(base, token=None):
     """Fetch the public endpoints and print each status code."""
     paths = ("/", "/health", "/api/gauge", "/api/gauge?demo=1")
     results = {}
@@ -468,7 +533,7 @@ def probe(base):
     last_error = None
     while time.time() < deadline:
         try:
-            _get(base + "/health")
+            _get(base + "/health", token)
             break
         except Exception as exc:
             last_error = exc
@@ -476,7 +541,7 @@ def probe(base):
     else:
         raise SystemExit(f"dashboard did not start: {last_error}")
     for path in paths:
-        status, body = _get(base + path)
+        status, body = _get(base + path, token)
         results[path] = (status, body)
         print(f"GET {path} {status}")
     return results
@@ -506,26 +571,33 @@ def assert_probe(results):
         raise SystemExit("dashboard HTML did not contain Hermes")
 
 
-def serve(port, open_browser=False, verify=False, self_check=False):
+def serve(port, open_browser=False, verify=False, self_check=False, host=DEFAULT_HOST, token=None):
+    require_token_off_loopback(host, token)
+    # A subclass, so two servers in one process never share a token.
+    handler = type("TokenHandler", (Handler,), {"token": token})
     try:
-        httpd = HTTPServer(("0.0.0.0", port), Handler)
+        httpd = HTTPServer((host, port), handler)
     except OSError as exc:
-        raise SystemExit(f"port {port} is not available: {exc}")
-    base = f"http://127.0.0.1:{port}"
+        raise SystemExit(f"port {port} is not available on {host}: {exc}")
+    # 0.0.0.0 answers on loopback too; any other interface is probed by its own address.
+    probe_host = DEFAULT_HOST if host in ("0.0.0.0", "") else host
+    base = f"http://{probe_host}:{port}"
     thread = threading.Thread(target=httpd.serve_forever, daemon=True)
     thread.start()
     try:
         if verify or self_check or open_browser:
-            assert_probe(probe(base))
+            assert_probe(probe(base, token))
         if self_check:
             print(f"hermes-gauge check ok -> {base}")
             return
         if open_browser:
             try:
-                webbrowser.open(base)
+                webbrowser.open(base + (f"/?token={token}" if token else ""))
             except Exception:
                 pass
         print(f"hermes-gauge dashboard -> {base}")
+        if not is_loopback(host):
+            print(f"listening on {host}: every request needs the token (?token=... or Authorization: Bearer)")
         try:
             threading.Event().wait()
         except KeyboardInterrupt:
@@ -542,6 +614,14 @@ def main(argv=None):
     parser.add_argument("--self-check", action="store_true", help="require HTTP 200, then exit")
     parser.add_argument("--fixture", action="store_true", help="serve the 12/38/63/92 fixture sessions")
     parser.add_argument("--live", action="store_true", help="read the plugin database only")
+    parser.add_argument(
+        "--host", default=DEFAULT_HOST,
+        help="interface to listen on (default 127.0.0.1); anything else needs --token",
+    )
+    parser.add_argument(
+        "--token", default=os.environ.get("GAUGE_TOKEN"),
+        help="shared secret every request must carry (default: $GAUGE_TOKEN)",
+    )
     args = parser.parse_args(argv)
     if args.fixture:
         os.environ["GAUGE_FIXTURE"] = "1"
@@ -554,6 +634,8 @@ def main(argv=None):
         open_browser=args.open,
         verify=args.verify or args.self_check,
         self_check=args.self_check,
+        host=args.host,
+        token=args.token or None,
     )
 
 
