@@ -1553,7 +1553,7 @@ def gauge_check(*args, session_id=None, model=None, conversation_history=None, c
 def _state_meta(session_ids):
     """Titles and activity from Hermes' ``state.db``; ``{}`` when it is unreadable."""
     sess = _sibling("sessions")
-    conn = sess.open_state(_STATE_DB)
+    conn = sess.open_state(_STATE_DB or hermes_home() / "state.db")
     if conn is None:
         return {}, False
     try:
@@ -1866,7 +1866,7 @@ def gauge_incidents(lang=None, days=None, format="json", write=False, **_):
 
 
 def data_dir():
-    """``~/.hermes/plugin-data/hermes-gauge``, or ``_DATA_DIR`` in tests."""
+    """``<Hermes home>/plugin-data/hermes-gauge`` of the active profile, or ``_DATA_DIR`` in tests."""
     if _DATA_DIR is not None:
         path = Path(_DATA_DIR)
         path.mkdir(parents=True, exist_ok=True)
@@ -1875,7 +1875,7 @@ def data_dir():
         from plugins.plugin_storage import plugin_data_dir
         return plugin_data_dir("hermes-gauge")
     except Exception:
-        path = Path.home() / ".hermes" / "plugin-data" / "hermes-gauge"
+        path = hermes_home() / "plugin-data" / "hermes-gauge"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
@@ -2941,10 +2941,10 @@ def gauge_audit(*args, session_id=None, limit=10, format=None, lang=None, write=
 
 
 def hermes_home():
-    """Hermes root. Tests point ``_HERMES_HOME`` at a temporary directory."""
+    """Hermes home of the active profile. Tests point ``_HERMES_HOME`` at a temporary directory."""
     if _HERMES_HOME is not None:
         return Path(_HERMES_HOME)
-    return Path.home() / ".hermes"
+    return _sibling("prefs").hermes_home()
 
 
 def _memory_limits(config_path):

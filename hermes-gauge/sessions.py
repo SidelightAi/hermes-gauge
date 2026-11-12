@@ -8,7 +8,6 @@ and a plain active / frozen / archived label. It never writes to either file.
 
 from __future__ import annotations
 
-import os
 import sqlite3
 from pathlib import Path
 
@@ -33,15 +32,15 @@ _WANTED = (
 )
 
 
-def state_db_path(home=None):
-    base = home or os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes")
-    return Path(base) / "state.db"
+def state_db_path(home):
+    """``state.db`` under a Hermes home. The caller resolves the home of the active profile."""
+    return Path(home) / "state.db"
 
 
-def open_state(path=None):
-    """Read-only connection to Hermes' ``state.db``, or None when it is not there."""
-    target = Path(path) if path else state_db_path()
-    if not target.is_file():
+def open_state(path):
+    """Read-only connection to Hermes' ``state.db`` at ``path``, or None when it is not there."""
+    target = Path(path) if path else None
+    if target is None or not target.is_file():
         return None
     try:
         conn = sqlite3.connect(target.as_uri() + "?mode=ro", uri=True, timeout=2.0)

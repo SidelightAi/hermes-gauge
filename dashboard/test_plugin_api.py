@@ -568,3 +568,12 @@ def test_routes_turn_a_failure_into_a_dict(hermes_home, gauge_tools, monkeypatch
     monkeypatch.setattr(gauge_tools, "gauge_audit", boom)
     result = api._api_audit()
     assert result == {"ok": False, "error": "RuntimeError: database is locked"}
+
+
+def test_dashboard_reads_the_database_of_the_active_profile(tmp_path, monkeypatch):
+    profile = tmp_path / "profiles" / "work"
+    fake = types.ModuleType("hermes_constants")
+    fake.get_hermes_home = lambda: profile
+    monkeypatch.setitem(sys.modules, "hermes_constants", fake)
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "default-home"))
+    assert Path(api._db_path()) == profile / "plugin-data" / "hermes-gauge" / "data.db"

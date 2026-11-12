@@ -169,10 +169,25 @@ def shipped_config_path():
     return CONFIG_PATH
 
 
+def hermes_home():
+    """The Hermes home of the active profile.
+
+    Inside Hermes this is ``hermes_constants.get_hermes_home()``, which follows
+    the active profile on every call. The environment fallback is only for a run
+    outside Hermes, where ``hermes_constants`` cannot be imported (the standalone
+    demo, the tests).
+    """
+    try:
+        from hermes_constants import get_hermes_home
+    except ImportError:
+        home = os.environ.get("HERMES_HOME")
+        return Path(home).expanduser() if home else Path.home() / ".hermes"
+    return Path(get_hermes_home())
+
+
 def user_config_path():
     """Preferences that survive a plugin update, under the Hermes home."""
-    home = os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
-    return Path(home) / "plugin-data" / "hermes-gauge" / "config.yaml"
+    return hermes_home() / "plugin-data" / "hermes-gauge" / "config.yaml"
 
 
 def _differs_from_default(parsed):

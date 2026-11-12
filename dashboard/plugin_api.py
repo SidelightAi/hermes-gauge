@@ -87,9 +87,18 @@ def _prefs_in_force():
         return DEFAULT_WATCH, DEFAULT_FULL, _windows.CHARS_PER_TOKEN
 
 
+def _hermes_home() -> Path:
+    """Hermes home of the active profile; the environment is only the fallback outside Hermes."""
+    try:
+        from hermes_constants import get_hermes_home
+    except ImportError:
+        home = os.environ.get("HERMES_HOME")
+        return Path(home).expanduser() if home else Path.home() / ".hermes"
+    return Path(get_hermes_home())
+
+
 def _db_path() -> str:
-    home = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
-    return os.path.join(home, "plugin-data", "hermes-gauge", "data.db")
+    return str(_hermes_home() / "plugin-data" / "hermes-gauge" / "data.db")
 
 
 def _colors(pct: float, watch: float = DEFAULT_WATCH, full: float = DEFAULT_FULL) -> dict:

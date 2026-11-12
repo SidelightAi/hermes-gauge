@@ -35,10 +35,11 @@ def test_open_state_is_read_only(tmp_path):
     conn.close()
 
 
-def test_state_db_path_follows_hermes_home(monkeypatch, tmp_path):
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    assert sessions.state_db_path() == tmp_path / "state.db"
+def test_state_db_path_is_under_the_home_it_is_given(monkeypatch, tmp_path):
+    # The module never guesses a home: the caller resolves the active profile.
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "ignored"))
     assert sessions.state_db_path(tmp_path / "x") == tmp_path / "x" / "state.db"
+    assert sessions.open_state(None) is None
 
 
 def test_session_meta_reads_known_sessions_and_skips_unknown_ones(tmp_path):

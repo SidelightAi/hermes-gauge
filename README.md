@@ -38,7 +38,7 @@ In Hermes Desktop: Capabilities → Plugins → Install from Git, with `Sideligh
 | auto-summary | Hermes shortened the older part of the chat. The live counter starts over. |
 | fresh start | `/new`. The counter is empty because the conversation started again, not because it was summarized. |
 
-Preferences live in `~/.hermes/plugin-data/hermes-gauge/config.yaml` (or `$HERMES_HOME`). An update replaces the file shipped inside the plugin, not this one. `language` is `auto`, `en` or `fr`. `alerts.route: session` means this conversation.
+Preferences live in `plugin-data/hermes-gauge/config.yaml` under the Hermes home of the active profile (`~/.hermes` by default). An update replaces the file shipped inside the plugin, not this one. `language` is `auto`, `en` or `fr`. `alerts.route: session` means this conversation.
 
 ## Why
 
@@ -372,7 +372,7 @@ Requires Hermes 0.22.3 or later, the first release with the `post_compaction` ho
 ### What it touches on your machine
 
 - **Network**: none. No third-party service, no telemetry, no update check.
-- **Writes**: only under `~/.hermes/plugin-data/hermes-gauge/` (the readings database, written reports) and the plugin's own `hermes-gauge/config.yaml` when you save preferences.
+- **Writes**: only under `plugin-data/hermes-gauge/` in the Hermes home of the active profile (`~/.hermes` for the default profile): the readings database, your saved preferences, written reports. Reads follow the same profile.
 - **Reads outside its own data**: Hermes' `state.db`, read-only, for session titles and last activity.
 - **Shell commands**: `hermes send --quiet --to <target>`, only when `alerts.route` is `home` or `custom:`. It runs in a short background thread with a 45-second timeout.
 - **Not reachable from a tool, command or route**: `tools.gauge_audit()` called from Python with no `format` runs a setup audit. It runs `hermes doctor` (120-second timeout), reads the sizes of `AGENT.md`, `SOUL.md`, `config.yaml`, `skills/` and `plugins/`, and reads the memory files under `memories/` and `profiles/*/memories/`. It only reports; it changes nothing.

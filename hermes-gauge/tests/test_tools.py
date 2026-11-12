@@ -2859,3 +2859,48 @@ def test_setup_findings_follow_the_language_setting(monkeypatch):
     assert tools._say("English", "Français") == "English"
     monkeypatch.setattr(tools, "load_config", lambda: _config())
     assert tools._say("English", "Français") == "English"
+
+
+def _active_profile(monkeypatch, tmp_path):
+    """A Hermes whose active profile is not the default one, and not what HERMES_HOME says."""
+    profile = tmp_path / "profiles" / "work"
+    profile.mkdir(parents=True)
+    fake = types.ModuleType("hermes_constants")
+    fake.get_hermes_home = lambda: profile
+    monkeypatch.setitem(sys.modules, "hermes_constants", fake)
+    return profile
+
+
+def test_every_read_follows_the_active_profile_not_the_default_home(monkeypatch, tmp_path):
+    profile = _active_profile(monkeypatch, tmp_path)
+    prefs = tools._sibling("prefs")
+    assert tools.hermes_home() == profile
+    assert prefs.hermes_home() == profile
+    assert prefs.user_config_path() == profile / "plugin-data" / "hermes-gauge" / "config.yaml"
+
+    # The memory audit reads the profile's memories, not the default home's.
+    memories = profile / "memories"
+    memories.mkdir()
+    (memories / "MEMORY.md").write_text("only in the work profile", encoding="utf-8")
+    metrics, _findings = tools.audit_memory_bank(tools.hermes_home())
+    assert metrics["files"] == 1 and metrics["chars"] > 0
+
+    # Session titles come from the profile's state.db.
+    make_state_db(profile / "state.db", [{"id": "sess-work", "title": "Work profile"}])
+    monkeypatch.setattr(tools, "_STATE_DB", None)
+    meta, found = tools._state_meta(["sess-work"])
+    assert found is True and meta["sess-work"]["title"] == "Work profile"
+
+
+def test_data_dir_fallback_uses_the_active_profile(monkeypatch, tmp_path):
+    profile = _active_profile(monkeypatch, tmp_path)
+    storage = sys.modules["plugins.plugin_storage"]
+    monkeypatch.delattr(storage, "plugin_data_dir", raising=False)
+    assert tools.data_dir() == profile / "plugin-data" / "hermes-gauge"
+    assert (profile / "plugin-data" / "hermes-gauge").is_dir()
+
+
+def test_outside_hermes_the_environment_is_the_only_fallback(monkeypatch, tmp_path):
+    monkeypatch.setitem(sys.modules, "hermes_constants", None)  # import raises ImportError
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path / "from-env"))
+    assert tools._sibling("prefs").hermes_home() == tmp_path / "from-env"
